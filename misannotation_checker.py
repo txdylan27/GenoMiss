@@ -13,7 +13,7 @@ import tkinter as tk
 from tkinter import ttk
 from tqdm import tqdm
 
-warnings.simplefilter('ignore', BiopythonWarning)
+# warnings.simplefilter('ignore', BiopythonWarning)
 
 # Establishing all functions for the program
 def get_default_num_threads():
@@ -215,8 +215,8 @@ def gene_joiner(processed_df):
     for gene, indices in grouped_dict:
         indices = indices.sort_values(by='start') # Sorting gene entries by start to maintain sequence order.
         # Checking to see if the gene has isoforms or not.
-        base_genes = indices[~indices['product_name'].str.contains('isoform X', case=False)]
-        isoforms = indices[indices['product_name'].str.contains('isoform X', case=False)]
+        base_genes = indices[~indices['product_name'].astype(str).str.contains('isoform X', case=False, na=False)]
+        isoforms = indices[indices['product_name'].astype(str).str.contains('isoform X', case=False, na=False)]
         # combine sequences for base gene if fragmented
         combined_base_genes = {}
         for row in base_genes.itertuples(index=False):
@@ -257,7 +257,9 @@ def isoform_picker(joined_df):
 
 def sequence_translator(refined_df):
     """"""
-    refined_df['protein_sequence'] = refined_df['sequence'].apply(lambda seq: str(Seq(seq).translate(to_stop=True)))
+    # refined_df['protein_sequence'] = refined_df['sequence'].apply(lambda seq: str(Seq(seq).translate(to_stop=True)))
+    refined_df['protein_sequence'] = refined_df['sequence'].apply(
+        lambda seq: str(Seq(seq + "N" * ((3 - len(seq) % 3) % 3)).translate(to_stop=True)))
     translated_df = refined_df.drop(columns=['sequence'])
     translated_df = translated_df.rename(columns={'protein_sequence': 'sequence'})
 
@@ -334,11 +336,11 @@ parser.add_argument('-db', '--database_path', help="""Input the file path to whe
 parser.add_argument('-t', '--num_threads', help="""Input the number of threads that you would like to use. By default, half of your available threads
                     will be used.""", default = get_default_num_threads())
 parser.add_argument('-i', '--identity_cutoff', help=""""Input the percent identity cutoff you would like to use for filtering of the fused gene alignments.
-                    The percent identity is the percentage of identical amino acids between two sequences at the same alignment positions. The default is 0.75.""",
-                    default = 0.75)
+                    The percent identity is the percentage of identical amino acids between two sequences at the same alignment positions. The default is 0.90.""",
+                    default = 0.90)
 parser.add_argument('-l', '--length_buffer', help="""Input the length buffer you would like to use for filtering of the fused gene alignments. The length
                     buffer refers to the value added to the subject length and alignment length as a means to avoid protein alignments to the indivdual gene parts
-                    of the fused gene. The default is 50 amino acids.""", default = 50)
+                    of the fused gene. The default is 50 amino acids.""", default = 100)
 
 args = parser.parse_args()
 
@@ -353,7 +355,7 @@ if args.database_path is None:
     db_path = cwd
 else:
     db_path = args.database_path
-num_threads = args.num_threads
+num_threads = str(args.num_threads)
 ident_cutoff = float(args.identity_cutoff) * 100
 len_buffer = float(args.length_buffer)
 
