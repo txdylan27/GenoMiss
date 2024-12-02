@@ -1,53 +1,68 @@
-import warnings
-import pyranges as pr
-import pandas as pd
+import argparse
 from Bio import SeqIO
 from Bio.Seq import Seq
-from Bio import BiopythonWarning
 import os
-import subprocess
-import argparse
+import pyranges as pr
+import pandas as pd
 import shutil
+import subprocess
+import sys
 import time
 import tkinter as tk
 from tkinter import ttk
 from tqdm import tqdm
 
-# warnings.simplefilter('ignore', BiopythonWarning)
-
-# Establishing all functions for the program
+# Defining all functions for the program
 def get_default_num_threads():
-    """Function used to identify the number of threads on the user's system and then use half of them for DIAMOND if no threads are inputted. Returns
-    half of the total available threads on the user's system."""
+    """Function used to identify the number of threads on the user's system and then use half of them for DIAMOND if no threads are inputted."""
+    
     total_threads = os.cpu_count() # Attempting to get the thread count for the user's system.
-    if total_threads is None: total_threads = 4 # Included in case - for some reason - Python is not able to identify their thread count.
+    if total_threads is None: 
+        total_threads = 4 # Included in case - for some reason - Python is not able to identify their thread count.
+        
     return max(1, total_threads // 2) # Returning the max of either 1 thread or half of the total_threads. The 1 is a fall-back in the rare instance of a system having 0 or only 1 thread.
     
 def genome_loader(genome, annotation):
-    """Function used to load in the provided genome and gff of the organism. Returns the genome indexed and the gff as a Pandas dataframe."""
+    """Function used to load in the provided genome and gff of the organism. Returns an indexed version of the genome and the gff as a dataframe."""
+    
     print("Loading in genome and annotation...")
+    
     idx_genome = SeqIO.index(genome, "fasta") # This is allowing for the indexing of the genome by chromosome without the loading of the entire genome.
-    gff = pr.read_gff3(annotation, as_df=True) # Reorganizing the gff into a Pandas df for easy manipulation.
+    gff = pr.read_gff3(annotation, as_df=True) # Reorganizing the gff into a dataframe for easy manipulation.
+    
     return idx_genome, gff
 
 def chromosome_parser(gff):
     """Function used to identify the chromosomes within the genome and gff based on the user's input. This can be aided by using NCBI's entry of the user's
     genome. Returns a filtered chromosome list."""
+    
     unfiltered_chrom_list = gff["Chromosome"].unique().tolist() # Getting a list of all of the unique chromosome identifiers present in the annotation file.
     while True:
         try:
             chrom_input = input("Input the chromsome prefixes - comma-separated - listed by RefSeq on the NCBI entry for your genome: ")
-            prefix_list = [prefix.strip().upper() for prefix in chrom_input.split(",")] # Create a list of prefixes provided by the user.
-            chrom_list = [chrom for chrom in unfiltered_chrom_list if any(prefix in chrom for prefix in prefix_list)] # Refine the initial chromosome list based on the user's inputted prefixes
-            break
-        except:
-            # need to add exceptions to tell the user what went wrong
-            continue
-    return chrom_list
+            if not chrom_input:
+                raise ValueError("Input cannot be empty. Please enter at least one chromosome prefix.")
+
+            prefix_list = [prefix.strip().upper() for prefix in chrom_input.split(",")] # Create a list of the prefixes provided by the user.
+            
+            chrom_list = [chrom for chrom in unfiltered_chrom_list if any(prefix in chrom for prefix in prefix_list)] # Refine the initial chromosome list based on the user's inputted prefixes.
+            if not chrom_list:
+                print("No chromosomes were found within the organism's annotation with the provided prefixes. Please try again.")
+                continue
+            
+            return chrom_list
+        
+        # Error handling
+        except ValueError as ve:
+            print(f"Input error: {ve}")
+        except Exception as e:
+            print(f"Unexpected error: {e}")
 
 def chromosome_selector(chrom_list):
     """Function that uses a GUI tool to allow the user to manually check the identified chromosomes before translation and fusion of the genome. Returns
     a manually selected and filtered chromosome list."""
+    
+    # Creating a list that will store the selected chromosomes by the checkboxes.
     selected_chrom = []
     
     def on_submit():
@@ -74,14 +89,16 @@ def chromosome_selector(chrom_list):
 
 def gff_manipulator(gff, chrom_list):
     """Function containing all manipulations (filterings, sortings, etc.) of the annotation dataframe. Returns a filtered annotation dataframe."""
+    
     filtered_gff = gff[gff["Chromosome"].isin(chrom_list)] # Creating a df that only contains annotations belonging to genes within the selected chromosomes.
     filtered_sorted_gff = filtered_gff.sort_values(by=["Start"]) # Making sure that the genes are sorted by position.
     filtered_sorted_gff = filtered_sorted_gff[filtered_sorted_gff["Feature"] == "CDS"] # Since we are doing protein alignment, only need the coding strands of each gene.
-    # filtered_sorted_gff = filtered_sorted_gff[["Chromosome", "Feature", "gene", "product", "Start", "End", "Strand"]] # Creating an easier-to-view dataframe for debugging purporses.
+    
     return filtered_sorted_gff
 
-def chromosome_processor(chrom, strand, genome, gff, flag):
+def chromosome_processor(chrom, strand, strand_name, genome, gff, flag):
     """Function that compiles multiple functions to return a dataframe containing all translated proteins for each gene on each chromosome for each strand."""
+    
     chrom_seq = genome[chrom].format("fasta") # Going into the indexed genome and retrieving the value (chromosome sequence) relating to the key (chromosome name).
     
     # Manipulating the chromosome sequence by discarding the sequence title line, replacing new line characters, and making the character case uniform.
@@ -96,19 +113,20 @@ def chromosome_processor(chrom, strand, genome, gff, flag):
     elif strand == "-":
         cs_gff = c_gff[c_gff["Strand"] == "-"]
     
-    processed_gene = gene_processor(chrom_seq, cs_gff, strand)
+    processed_gene = gene_processor(chrom_seq, cs_gff, strand) # Using CDS coordinates to build gene sequences while maintaining positional order.
     processed_gene_df = pd.DataFrame(processed_gene) # Turning the processed_gene list into a dataframe.
-    total_prot_df = gene_joiner(processed_gene_df) # Combining protein sequences that may have been fragmented.
+    total_prot_df = gene_joiner(processed_gene_df) # Combining DNA sequences that may have been fragmented.
     refined_prot_df = isoform_picker(total_prot_df) # Keeping the longest isoforms and discarding the rest.
     translated_df = sequence_translator(refined_prot_df) # Translating the kept sequences.
       
-    translated_df.to_csv(f"{output_prefix}/{chrom}_{strand}_gene2protein.csv", index=False)
+    translated_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_gene2protein.csv", index=False)
     
     return translated_df
 
 def gene_processor(chrom_seq, cs_gff, strand):
-    """Function that uses the CDS coordinates within the gff to retrieve all gene protein structures on a specific strand of a chromosome. Returns
-    a list of dictionaries containing information about each gene and their full translated sequence based on the CDS."""
+    """Function that uses the CDS coordinates within the gff to retrieve all gene coding sequences on a specific strand of a chromosome. Returns
+    a list of dictionaries containing information about each gene and their full CDS sequence based on the coordinates."""
+    
     # Establishing variables.
     results = [] # Using a list to store dictionaries that contain each gene's protein information for faster processing.
     CDS_coords = [] # Using a list to store each coordinate pair for a gene's coding strand exons.
@@ -119,7 +137,7 @@ def gene_processor(chrom_seq, cs_gff, strand):
     # Going through each gene entry and processing them.
     for entry in cs_gff.itertuples(index=False): # Using itertuples as a memory-efficient and fast way to access each row of the dataframe.   
             
-        # Evaluating if the current gene entry is a continuation of the previous gene's coding strand exons. This will work for the first entry as well.
+        # Evaluating if the current gene entry is a continuation of the previous gene's coding strand exons.
         if entry.gene == previous_gene:
             exon_coords = [entry.Start, entry.End] # If it is, record the exon's genomic coordinates.
             if "isoform" in str(entry.product).lower(): # Check for isoforms. If they exist, record their information.
@@ -208,16 +226,18 @@ def gene_processor(chrom_seq, cs_gff, strand):
 def gene_joiner(processed_df):
     """Function that combines gene sequences that may have been fragmented due to overlapping gene regions leading to breaks in gene entries. Returns
     a dataframe containing full-length gene sequences."""
+    
     grouped_dict = processed_df.groupby("gene") # This creates a dictionary where the keys are genes and the values are their indices within the dataframe.
     joined_results = [] # Using a list to store the results to build the dataframe after.
     
-    # Need to mess with this as there's a few that aren't working exactly as expected
     for gene, indices in grouped_dict:
         indices = indices.sort_values(by='start') # Sorting gene entries by start to maintain sequence order.
+        
         # Checking to see if the gene has isoforms or not.
         base_genes = indices[~indices['product_name'].astype(str).str.contains('isoform X', case=False, na=False)]
         isoforms = indices[indices['product_name'].astype(str).str.contains('isoform X', case=False, na=False)]
-        # combine sequences for base gene if fragmented
+        
+        # For genes with no isoforms, see if there are multiple entries for the same gene name. If there are, combine their sequences.
         combined_base_genes = {}
         for row in base_genes.itertuples(index=False):
             gene_name = row.gene
@@ -228,7 +248,7 @@ def gene_joiner(processed_df):
                 combined_base_genes[gene_name] = {'gene': gene_name, 'product_name': row.product_name, 'start': row.start, 'end': row.end, 'sequence': row.sequence}
         joined_results.extend(combined_base_genes.values())
         
-        # combine sequences for isoforms if fragmented
+        # For genes with isoforms, see if there are multiple entries for the same product name. If there are, combine their sequences.
         combined_isoforms = {}
         for row in isoforms.itertuples(index=False):
             product_name = row.product_name
@@ -241,34 +261,38 @@ def gene_joiner(processed_df):
         
     joined_results = pd.DataFrame(joined_results)
     joined_results = joined_results.sort_values(by=['start', 'end'])
-    joined_results = joined_results.drop_duplicates()
     
     return joined_results
         
 def isoform_picker(joined_df):
-    """Function that goes through the inputted dataframe and analyzes the length of each gene, keeping only the longest gene of multiple genes. This is
-    a means to keep only the longest isoform of a gene with multiple isoforms. Returns a dataframe with only one entry per gene."""
-    joined_df['sequence_length'] = joined_df['sequence'].apply(len)
-    joined_df = joined_df.loc[joined_df.groupby(['gene'])['sequence_length'].idxmax()]
+    """Function that goes through the inputted dataframe and analyzes the length of each gene, keeping only the longest gene of multiple 
+    entries of the same gene. This is a means to keep only the longest isoform of a gene with multiple isoforms. Returns a dataframe with 
+    only one entry per gene."""
+    
+    joined_df['sequence_length'] = joined_df['sequence'].apply(len) # Get the length of each gene's sequence.
+    joined_df = joined_df.loc[joined_df.groupby(['gene'])['sequence_length'].idxmax()] # Keep only the gene with the longest sequence length.
     joined_df = joined_df.drop(columns=['sequence_length'])
     joined_df = joined_df.sort_values(by=['start', 'end'])
     
     return joined_df
 
 def sequence_translator(refined_df):
-    """"""
-    # refined_df['protein_sequence'] = refined_df['sequence'].apply(lambda seq: str(Seq(seq).translate(to_stop=True)))
-    refined_df['protein_sequence'] = refined_df['sequence'].apply(
-        lambda seq: str(Seq(seq + "N" * ((3 - len(seq) % 3) % 3)).translate(to_stop=True)))
+    """Function that translates the kept gene CDS sequences. To take into account rare, incomplete gene sequences due to the annotation process,
+    padding is added when applicable to keep triplets. Returns a dataframe containing the translated sequences."""
+    
+    refined_df['protein_sequence'] = refined_df['sequence'].apply(lambda seq: str(Seq(seq + "N" * ((3 - len(seq) % 3) % 3)).translate(to_stop=True)))
     translated_df = refined_df.drop(columns=['sequence'])
     translated_df = translated_df.rename(columns={'protein_sequence': 'sequence'})
 
     return translated_df
     
-def diamond_alignment(prot_output_df, chrom, strand, cwd, diamond_path, db_path, num_threads, ident_cutoff, len_buffer, output_prefix):
-    """"""   
+def diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db_path, num_threads, ident_cutoff, len_buffer, output_prefix):
+    """Function used to fuse neigboring genes and run the DIAMOND protein alignment script on the fused genes. Returns a dataframe containing unique genes that
+    fit the user-inputted filtering criteria."""   
+    
     temp_fasta_path = f"{output_prefix}/temp_fasta.faa" # The input for DIAMOND is a fasta file. Therefore, need to convert the protein dataframe into a fasta format.
     fused_prot_df_list = [] # This list will be used to store information about the fused proteins.
+    
     with open(temp_fasta_path, "w") as temp_fasta:
         first = True
         for prot in prot_output_df.itertuples(index=False): # Going into each row (protein) of the protein dataframe.
@@ -289,29 +313,40 @@ def diamond_alignment(prot_output_df, chrom, strand, cwd, diamond_path, db_path,
                 
     fused_prot_df = pd.DataFrame(fused_prot_df_list)
     
-    diamond_output = f"{output_prefix}/{chrom}_{strand}_diamond_results.tsv"
+    # Creating the diamond output file path and the diamond command that will be ran in the subprocess function. 
+    diamond_output = f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv"
     diamond_command = [diamond_path, "blastp", "--db", db_path, "--query", temp_fasta_path, "--out", diamond_output, 
                        "--outfmt", "6", "qseqid", "qlen", "sseqid", "slen", "qstart", "qend", "sstart", "send",
                        "pident", "nident", "mismatch", "evalue", "bitscore", "length", "qtitle", "stitle",
                        "--header", "--evalue", "1e-5", "--threads", num_threads]
+    
+    # Running the diamond command via subprocess.
     try:
         subprocess.run(diamond_command, check=True, text=True, capture_output=True)
     except subprocess.CalledProcessError:
-        print(f"Error during DIAMOND execution for {chrom}, {strand} strand.")
+        print(f"Error during DIAMOND execution for {chrom}, {strand_name} strand.")
         raise
+    
+    # As the diamond headers are very obfuscated, included proper header titles.
     headers = ["fused_gene", "query_length", "subject_id", "subject_length", "start_of_alignment_in_query", "end_of_alignment_in_query", 
                "start_of_alignment_in_subject", "end_of_alignment_in_subject", "percentage_of_identical_matches", "number_of_identical_matches", 
                "number_of_mismatches", "expected_value", "bit_score", "alignment_length", "query_title", "subject_title"]
-    diamond_df = pd.read_csv(f"{output_prefix}/{chrom}_{strand}_diamond_results.tsv", sep="\t", skiprows = 3, names = headers)
-    fused_diamond_df = fused_prot_df.merge(fused_prot_df.merge(diamond_df, how='outer', on='fused_gene', sort=False)) # weird gimmicky solution I found to original order not being maintained after merging
-    fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand}_diamond_results.tsv", sep="\t")
-    # this is hard length cutoff, added alignment length cutoff as well, could maybe do a dynamic cutoff that changes based on length of gene size (> 50% of gene 1 len or 50% of gene 2 len)
+    
+    # Converting the .tsv provided by diamond to a dataframe while skipping useless rows (the first 3) and renaming the headers.
+    diamond_df = pd.read_csv(f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv", sep="\t", skiprows = 3, names = headers)
+    
+    # Merging the diamond results dataframe with the fused protein dataframe. Had to use a weird gimmicky solution I found to keep the original order preserved.
+    fused_diamond_df = fused_prot_df.merge(fused_prot_df.merge(diamond_df, how='outer', on='fused_gene', sort=False))
+    fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv", sep="\t")
+    
+    # Applying the filters inputted by the user.
     filtered_fused_diamond_df = fused_diamond_df[((fused_diamond_df["subject_length"] > (fused_diamond_df["gene_1_len"] + len_buffer)) | (fused_diamond_df["subject_length"] > (fused_diamond_df["gene_2_len"] + len_buffer)))
     & (fused_diamond_df["percentage_of_identical_matches"] > ident_cutoff) & ((fused_diamond_df["alignment_length"] > (fused_diamond_df["gene_1_len"] + len_buffer)) & (fused_diamond_df["alignment_length"] > (fused_diamond_df["gene_2_len"] + len_buffer)))] 
-    filtered_fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand}_full_filtered_fused_diamond.csv")
-    # choosing unique based on highest bit score
+    filtered_fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_full_filtered_fused_diamond.csv")
+    
+    # Creating a dataframe that takes the highest match for each alignment after filtering for easy viewing.
     unique_filtered_fused_diamond_df = filtered_fused_diamond_df.groupby('fused_gene').first().reset_index()
-    unique_filtered_fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand}_unique_filtered_fused_diamond.csv")
+    unique_filtered_fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_unique_filtered_fused_diamond.csv")
     
     os.remove(temp_fasta_path)
     
@@ -335,9 +370,9 @@ parser.add_argument('-db', '--database_path', help="""Input the file path to whe
                     not provided, the directory provided in -wd will be used.""")
 parser.add_argument('-t', '--num_threads', help="""Input the number of threads that you would like to use. By default, half of your available threads
                     will be used.""", default = get_default_num_threads())
-parser.add_argument('-i', '--identity_cutoff', help=""""Input the percent identity cutoff you would like to use for filtering of the fused gene alignments.
-                    The percent identity is the percentage of identical amino acids between two sequences at the same alignment positions. The default is 0.90.""",
-                    default = 0.90)
+parser.add_argument('-i', '--identity_cutoff', help="""Input the percent identity cutoff you would like to use for filtering of the fused gene alignments.
+                    The percent identity is the percentage of identical amino acids between two sequences at the same alignment positions. The default is 0.75.""",
+                    default = 0.75)
 parser.add_argument('-l', '--length_buffer', help="""Input the length buffer you would like to use for filtering of the fused gene alignments. The length
                     buffer refers to the value added to the subject length and alignment length as a means to avoid protein alignments to the indivdual gene parts
                     of the fused gene. The default is 50 amino acids.""", default = 100)
@@ -359,6 +394,13 @@ num_threads = str(args.num_threads)
 ident_cutoff = float(args.identity_cutoff) * 100
 len_buffer = float(args.length_buffer)
 
+# Storing the command-line arguments inputted by the user in a log file for future reference by the user.
+if not os.path.exists("output"):
+    os.makedirs("output")
+with open("output/args.log", 'w') as log_file:
+    log_file.write("Command-line input:\n")
+    log_file.write(" ".join(sys.argv) + "\n")
+
 # Loading in the organism's genome and annotation.
 os.chdir(cwd)
 start_time = time.time()
@@ -373,7 +415,7 @@ selected_chrom_list = chromosome_selector(filtered_chrom_list)
 # Manipulating the df for iteration
 filtered_gff = gff_manipulator(gff, selected_chrom_list)
 
-# A list to store 
+# A list to store each chromosome strand's top gene alignments.
 fused_hits_genome_df_list = []
 
 # Initializing a progress bar for tracking the program's status.
@@ -383,20 +425,26 @@ with tqdm(total=total_steps, unit="step") as pbar:
     # Going into each strand of each chromosome, getting each protein's sequence, fusing neighboring genes, then using DIAMOND to check for misannotations.
     for chrom in selected_chrom_list:
         for strand in ["+", "-"]:
+            # Avoiding use of + in file names since it is a no no in the rubric :)
+            if strand == "+":
+                strand_name = "plus"
+            elif strand == "-":
+                strand_name = "neg"
             
-            output_prefix = f"output/{chrom}/{strand}"  # Setting up the output file path.
+            output_prefix = f"output/{chrom}/{strand_name}"  # Setting up the output file path.
             if not os.path.exists(output_prefix):
                 os.makedirs(output_prefix)
             
-            pbar.set_description(f"Processing {chrom} {strand} strand")
-            prot_output_df = chromosome_processor(chrom, strand, idx_genome, filtered_gff, output_prefix)
+            pbar.set_description(f"Processing {chrom} {strand_name} strand")
+            prot_output_df = chromosome_processor(chrom, strand, strand_name, idx_genome, filtered_gff, output_prefix)
             pbar.update(1)
             
-            pbar.set_description(f"Running DIAMOND on {chrom} {strand} strand's fused genes")
-            unique_chrom_strand_df = diamond_alignment(prot_output_df, chrom, strand, cwd, diamond_path, db_path, 
+            pbar.set_description(f"Running DIAMOND on {chrom} {strand_name} strand's fused genes")
+            unique_chrom_strand_df = diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db_path, 
                                                       num_threads, ident_cutoff, len_buffer, output_prefix)
             pbar.update(1)
             fused_hits_genome_df_list.append(unique_chrom_strand_df)
 
+# Compiling all unique gene alignments to have one dataframe that contains genome-wide results.
 unique_genome_df = pd.concat(fused_hits_genome_df_list, ignore_index=True)
 unique_genome_df.to_csv("output/unique_genome_fused_results.csv")
