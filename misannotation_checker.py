@@ -361,12 +361,10 @@ parser = argparse.ArgumentParser(
                     sequences are then aligned with a local reference protein database using the command-line protein alignment tool DIAMOND. 
                     Based on user-inputted criteria, potential misannotated genes are returned to the user in a CSV format. This program only works
                     with genomes containing assembled chromosomes. This program is not compatible with scaffolded genomes.""")
-parser.add_argument('-wd', '--project_directory', help="""Input the file path to the project directory. Ideally this directory will contain the organism's 
-                    genome, gff, as well as the protein database you wish to use with DIAMOND. If an input is not provided, the current directory 
-                    will be used.""", default = os.getcwd())
 parser.add_argument('-g', '--organism_genome', help="""Input the organism's genome in a fasta format. This should be a RefSeq genome. This input is required.""", required=True)
 parser.add_argument('-a', '--organism_annotation', help="""Input the organism's annotation features in a gff format. This should be a RefSeq annotation. This input is required.""", required=True)
-parser.add_argument('-db', '--database_path', help="""Input the file path to the local reference protein database. This input is required.""", required=True)
+parser.add_argument('-db', '--database_path', help="""Input the file path to the local reference protein database. This should be a DIAMOND
+                    compatible database. This input is required.""", required=True)
 parser.add_argument('-t', '--num_threads', help="""Input the number of threads that you would like to use. By default, half of your available threads
                     will be used.""", default = get_default_num_threads())
 parser.add_argument('-i', '--identity_cutoff', help="""Input the percent identity cutoff you would like to use for filtering of the fused gene alignments.
@@ -374,7 +372,10 @@ parser.add_argument('-i', '--identity_cutoff', help="""Input the percent identit
                     default = 0.75)
 parser.add_argument('-l', '--length_buffer', help="""Input the length buffer you would like to use for filtering of the fused gene alignments. The length
                     buffer refers to the value added to the subject length and alignment length as a means to avoid protein alignments to the indivdual gene parts
-                    of the fused gene. The default is 50 amino acids.""", default = 100)
+                    of the fused gene. The default is 50 amino acids.""", default = 50)
+parser.add_argument('-wd', '--project_directory', help="""Input the file path to the project directory. Ideally this directory will contain the organism's 
+                    genome, gff, as well as the protein database you wish to use with DIAMOND. If an input is not provided, the current directory 
+                    will be used.""", default = os.getcwd())
 
 args = parser.parse_args()
 
