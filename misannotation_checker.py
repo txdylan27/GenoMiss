@@ -340,8 +340,14 @@ def diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_p
     fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv", sep="\t")
     
     # Applying the filters inputted by the user.
-    filtered_fused_diamond_df = fused_diamond_df[((fused_diamond_df["subject_length"] > (fused_diamond_df["gene_1_len"] + len_buffer)) | (fused_diamond_df["subject_length"] > (fused_diamond_df["gene_2_len"] + len_buffer)))
-    & (fused_diamond_df["percentage_of_identical_matches"] > ident_cutoff) & ((fused_diamond_df["alignment_length"] > (fused_diamond_df["gene_1_len"] + len_buffer)) & (fused_diamond_df["alignment_length"] > (fused_diamond_df["gene_2_len"] + len_buffer)))] 
+    filtered_fused_diamond_df = fused_diamond_df[
+        (fused_diamond_df["start_of_alignment_in_query"] < fused_diamond_df["gene_1_len"]) &
+        (fused_diamond_df["end_of_alignment_in_query"] > fused_diamond_df["gene_1_len"]) & 
+        (fused_diamond_df["percentage_of_identical_matches"] > ident_cutoff)
+        ]
+    # filtered_fused_diamond_df = fused_diamond_df[((fused_diamond_df["subject_length"] > (fused_diamond_df["gene_1_len"] + len_buffer)) | (fused_diamond_df["subject_length"] > (fused_diamond_df["gene_2_len"] + len_buffer)))
+    # & (fused_diamond_df["percentage_of_identical_matches"] > ident_cutoff) & ((fused_diamond_df["alignment_length"] > (fused_diamond_df["gene_1_len"] + len_buffer)) & (fused_diamond_df["alignment_length"] > (fused_diamond_df["gene_2_len"] + len_buffer)))]
+    
     filtered_fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_full_filtered_fused_diamond.csv")
     
     # Creating a dataframe that takes the highest match for each alignment after filtering for easy viewing.
