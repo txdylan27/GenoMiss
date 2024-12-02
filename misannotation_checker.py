@@ -366,8 +366,7 @@ parser.add_argument('-wd', '--project_directory', help="""Input the file path to
                     will be used.""", default = os.getcwd())
 parser.add_argument('-g', '--organism_genome', help="""Input the organism's genome in a fasta format. This should be a RefSeq genome. This input is required.""", required=True)
 parser.add_argument('-a', '--organism_annotation', help="""Input the organism's annotation features in a gff format. This should be a RefSeq annotation. This input is required.""", required=True)
-parser.add_argument('-db', '--database_path', help="""Input the file path to where the local reference protein database is stored. If an input is 
-                    not provided, the directory provided in -wd will be used.""")
+parser.add_argument('-db', '--database_path', help="""Input the file path to the local reference protein database. This input is required.""", required=True)
 parser.add_argument('-t', '--num_threads', help="""Input the number of threads that you would like to use. By default, half of your available threads
                     will be used.""", default = get_default_num_threads())
 parser.add_argument('-i', '--identity_cutoff', help="""Input the percent identity cutoff you would like to use for filtering of the fused gene alignments.
@@ -386,10 +385,7 @@ if cwd.endswith("/"):
 genome = args.organism_genome
 annotation = args.organism_annotation
 diamond_path = shutil.which("diamond")
-if args.database_path is None:
-    db_path = cwd
-else:
-    db_path = args.database_path
+db_path = args.database_path
 num_threads = str(args.num_threads)
 ident_cutoff = float(args.identity_cutoff) * 100
 len_buffer = float(args.length_buffer)
