@@ -286,7 +286,7 @@ def sequence_translator(refined_df):
 
     return translated_df
     
-def diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db_path, num_threads, ident_cutoff, len_buffer, output_prefix):
+def diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db, num_threads, ident_cutoff, output_prefix):
     """Function used to fuse neigboring genes and run the DIAMOND protein alignment script on the fused genes. Returns a dataframe containing unique genes that
     fit the user-inputted filtering criteria."""   
     
@@ -315,7 +315,7 @@ def diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_p
     
     # Creating the diamond output file path and the diamond command that will be ran in the subprocess function. 
     diamond_output = f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv"
-    diamond_command = [diamond_path, "blastp", "--db", db_path, "--query", temp_fasta_path, "--out", diamond_output, 
+    diamond_command = [diamond_path, "blastp", "--db", db, "--query", temp_fasta_path, "--out", diamond_output, 
                        "--outfmt", "6", "qseqid", "qlen", "sseqid", "slen", "qstart", "qend", "sstart", "send",
                        "pident", "nident", "mismatch", "evalue", "bitscore", "length", "qtitle", "stitle",
                        "--header", "--evalue", "1e-5", "--threads", num_threads]
@@ -339,18 +339,17 @@ def diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_p
     fused_diamond_df = fused_prot_df.merge(fused_prot_df.merge(diamond_df, how='outer', on='fused_gene', sort=False))
     fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv", sep="\t")
     
-    # Applying the filters inputted by the user.
-    filtered_fused_diamond_df = fused_diamond_df[
-        (fused_diamond_df["start_of_alignment_in_query"] < fused_diamond_df["gene_1_len"]) &
-        (fused_diamond_df["end_of_alignment_in_query"] > fused_diamond_df["gene_1_len"]) & 
-        (fused_diamond_df["percentage_of_identical_matches"] > ident_cutoff)
-        ]
-    # filtered_fused_diamond_df = fused_diamond_df[((fused_diamond_df["subject_length"] > (fused_diamond_df["gene_1_len"] + len_buffer)) | (fused_diamond_df["subject_length"] > (fused_diamond_df["gene_2_len"] + len_buffer)))
-    # & (fused_diamond_df["percentage_of_identical_matches"] > ident_cutoff) & ((fused_diamond_df["alignment_length"] > (fused_diamond_df["gene_1_len"] + len_buffer)) & (fused_diamond_df["alignment_length"] > (fused_diamond_df["gene_2_len"] + len_buffer)))]
+    # Applying the identity cutoff filter inputted by the user as well as filtering to only keep hits with overlaps between the two gene parts.
+    filtered_fused_diamond_df = fused_diamond_df[(fused_diamond_df["start_of_alignment_in_query"] < fused_diamond_df["gene_1_len"]) &
+                                                 (fused_diamond_df["end_of_alignment_in_query"] > fused_diamond_df["gene_1_len"]) & 
+                                                 (fused_diamond_df["percentage_of_identical_matches"] > ident_cutoff)
+                                                 ].copy()
     
+    # Creating an overlap column to show how much overlap there is. The greater the overlap, the better in general.
+    filtered_fused_diamond_df.loc[:,"overlap_region"] = (filtered_fused_diamond_df["end_of_alignment_in_query"] - filtered_fused_diamond_df["gene_1_len"])
     filtered_fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_full_filtered_fused_diamond.csv")
     
-    # Creating a dataframe that takes the highest match for each alignment after filtering for easy viewing.
+    # Creating a dataframe that takes the greatest match for each alignment after filtering for easy viewing.
     unique_filtered_fused_diamond_df = filtered_fused_diamond_df.groupby('fused_gene').first().reset_index()
     unique_filtered_fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_unique_filtered_fused_diamond.csv")
     
@@ -366,36 +365,28 @@ parser = argparse.ArgumentParser(
                     proteins in a sequential manner from the genome by chromosome and strand, then fuses neighboring gene sequences. These fused 
                     sequences are then aligned with a local reference protein database using the command-line protein alignment tool DIAMOND. 
                     Based on user-inputted criteria, potential misannotated genes are returned to the user in a CSV format. This program only works
-                    with genomes containing assembled chromosomes. This program is not compatible with scaffolded genomes.""")
-parser.add_argument('-g', '--organism_genome', help="""Input the organism's genome in a fasta format. This should be a RefSeq genome. This input is required.""", required=True)
-parser.add_argument('-a', '--organism_annotation', help="""Input the organism's annotation features in a gff format. This should be a RefSeq annotation. This input is required.""", required=True)
-parser.add_argument('-db', '--database_path', help="""Input the file path to the local reference protein database. This should be a DIAMOND
-                    compatible database. This input is required.""", required=True)
+                    with genomes containing assembled chromosomes. This program is not compatible with scaffolded genomes. The program will also ask the
+                    user for the prefixes associated with their chromosomes. These can be found at the bottom of your genome's NCBI website page, under the
+                    chromosome section.""")
+parser.add_argument('-g', '--organism_genome', help="""Input the organism's genome in a fasta format. This should be a RefSeq genome. This input is required.""", required=True, type=str)
+parser.add_argument('-a', '--organism_annotation', help="""Input the organism's annotation features in a gff format. This should be a RefSeq annotation. This input is required.""", required=True, type=str)
+parser.add_argument('-db', '--database', help="""Input the local reference protein database in a dmnd format. This input is required.""", required=True, type=str)
 parser.add_argument('-t', '--num_threads', help="""Input the number of threads that you would like to use. By default, half of your available threads
-                    will be used.""", default = get_default_num_threads())
+                    will be used.""", default = get_default_num_threads(), type=int)
 parser.add_argument('-i', '--identity_cutoff', help="""Input the percent identity cutoff you would like to use for filtering of the fused gene alignments.
                     The percent identity is the percentage of identical amino acids between two sequences at the same alignment positions. The default is 0.75.""",
-                    default = 0.75)
-parser.add_argument('-l', '--length_buffer', help="""Input the length buffer you would like to use for filtering of the fused gene alignments. The length
-                    buffer refers to the value added to the subject length and alignment length as a means to avoid protein alignments to the indivdual gene parts
-                    of the fused gene. The default is 50 amino acids.""", default = 50)
-parser.add_argument('-wd', '--project_directory', help="""Input the file path to the project directory. Ideally this directory will contain the organism's 
-                    genome, gff, as well as the protein database you wish to use with DIAMOND. If an input is not provided, the current directory 
-                    will be used.""", default = os.getcwd())
+                    default = 0.75, type=float)
 
 args = parser.parse_args()
 
 # Establishing variables from args.
-cwd = args.project_directory
-if cwd.endswith("/"):
-    cwd = cwd[:-1]
+cwd = os.getcwd()
 genome = args.organism_genome
 annotation = args.organism_annotation
 diamond_path = shutil.which("diamond")
-db_path = args.database_path
+db = args.database
 num_threads = str(args.num_threads)
 ident_cutoff = float(args.identity_cutoff) * 100
-len_buffer = float(args.length_buffer)
 
 # Storing the command-line arguments inputted by the user in a log file for future reference by the user.
 if not os.path.exists("output"):
@@ -443,11 +434,12 @@ with tqdm(total=total_steps, unit="step") as pbar:
             pbar.update(1)
             
             pbar.set_description(f"Running DIAMOND on {chrom} {strand_name} strand's fused genes")
-            unique_chrom_strand_df = diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db_path, 
-                                                      num_threads, ident_cutoff, len_buffer, output_prefix)
+            unique_chrom_strand_df = diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db, 
+                                                      num_threads, ident_cutoff, output_prefix)
             pbar.update(1)
             fused_hits_genome_df_list.append(unique_chrom_strand_df)
 
 # Compiling all unique gene alignments to have one dataframe that contains genome-wide results.
 unique_genome_df = pd.concat(fused_hits_genome_df_list, ignore_index=True)
+unique_genome_df = unique_genome_df.sort_values(by="overlap_region", ascending=False)
 unique_genome_df.to_csv("output/unique_genome_fused_results.csv")
