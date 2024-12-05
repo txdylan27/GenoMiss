@@ -1,6 +1,10 @@
 import argparse
 from Bio import SeqIO
 from Bio.Seq import Seq
+import matplotlib
+matplotlib.use('TkAgg')  # Use the TkAgg backend for GUI environments
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
 import os
 import pyranges as pr
 import pandas as pd
@@ -340,13 +344,17 @@ def diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_p
     fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv", sep="\t")
     
     # Applying the identity cutoff filter inputted by the user as well as filtering to only keep hits with overlaps between the two gene parts.
+    # Last filter is to check if an entry has an alignment start before the gene_1_len
     filtered_fused_diamond_df = fused_diamond_df[(fused_diamond_df["start_of_alignment_in_query"] < fused_diamond_df["gene_1_len"]) &
                                                  (fused_diamond_df["end_of_alignment_in_query"] > fused_diamond_df["gene_1_len"]) & 
                                                  (fused_diamond_df["percentage_of_identical_matches"] > ident_cutoff)
                                                  ].copy()
+
     
     # Creating an overlap column to show how much overlap there is. The greater the overlap, the better in general.
-    filtered_fused_diamond_df.loc[:,"overlap_region"] = (filtered_fused_diamond_df["end_of_alignment_in_query"] - filtered_fused_diamond_df["gene_1_len"])
+    filtered_fused_diamond_df.loc[:, "coverage_gene_1"] = ((filtered_fused_diamond_df["gene_1_len"] - filtered_fused_diamond_df["start_of_alignment_in_query"]) / filtered_fused_diamond_df["gene_1_len"])
+    filtered_fused_diamond_df.loc[:, "coverage_gene_2"] = ((filtered_fused_diamond_df["end_of_alignment_in_query"] - (filtered_fused_diamond_df["gene_1_len"] + 1)) / filtered_fused_diamond_df["gene_2_len"])
+    filtered_fused_diamond_df.loc[:, "overlap_score"] = ((filtered_fused_diamond_df["coverage_gene_1"] + filtered_fused_diamond_df["coverage_gene_2"]) / 2)                                                       
     filtered_fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_full_filtered_fused_diamond.csv")
     
     # Creating a dataframe that takes the greatest match for each alignment after filtering for easy viewing.
@@ -356,8 +364,51 @@ def diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_p
     os.remove(temp_fasta_path)
     
     return unique_filtered_fused_diamond_df
-    
 
+def get_overlap_distribution_cutoff(df):
+    """Function that displays a distribution plot of the overlap region sizes identified in the data frame and then allows the user to select a cutoff range with a slider. Returns
+    a data frame with the cutoff value used as a filter in the overlap region column."""
+    
+    print("Please select the overlap region size cutoff you would like to use for filtering. Use the slider to select the cutoff value. Exit out of the plot when finished.")
+        
+    # Creating the number of bins following the square root rule.
+    # num_bins = int(len(df["overlap_region"])**0.5)
+    
+    # Creating the plot and its objects.
+    fig, ax = plt.subplots(figsize=(8,5))
+    plt.subplots_adjust(bottom=0.2)
+    n, bins, patches = ax.hist(df["overlap_region"], bins="auto", edgecolor="black", alpha=0.7)
+    ax.set_title("Distribution of Overlap Region Sizes")
+    ax.set_xlabel("Overlap Region Size")
+    ax.set_ylabel("Frequency")
+    ax.grid(axis="y", alpha=0.75)
+    
+    # Adding a vertical line to serve as the cutoff demarcation.
+    cutoff_line = ax.axvline(x=0, color="red", linestyle="--", label="Cutoff")
+    ax.legend()
+    
+    # Creating the slider for the user to select the cutoff.
+    ax_slider = plt.axes([0.2, 0.05, 0.6, 0.03]) # Position of the slider.
+    slider = Slider(ax_slider, "Cutoff", df["overlap_region"].min(), df["overlap_region"].max(), valinit=0)
+    
+    # Creating a function that updates the slider when moved.
+    def update(val):
+        cutoff = slider.val
+        cutoff_line.set_xdata([cutoff, cutoff]) # Updating the vertical line.
+        fig.canvas.draw_idle() # Redrawing the figure.
+        
+    slider.on_changed(update) # Linking the slider's movement to the update function.
+    
+    plt.show()
+    
+    cutoff_value = slider.val
+    filtered_df = df[df["overlap_region"] >= cutoff_value]
+    
+    print(f"A cutoff value of {cutoff_value:.0f} was selected.")
+    
+    return filtered_df
+    
+    
 # Establishing command-line arguments
 parser = argparse.ArgumentParser(
                     prog="Genome Misannotation Checker",
@@ -441,5 +492,11 @@ with tqdm(total=total_steps, unit="step") as pbar:
 
 # Compiling all unique gene alignments to have one dataframe that contains genome-wide results.
 unique_genome_df = pd.concat(fused_hits_genome_df_list, ignore_index=True)
-unique_genome_df = unique_genome_df.sort_values(by="overlap_region", ascending=False)
-unique_genome_df.to_csv("output/unique_genome_fused_results.csv")
+
+unique_genome_df = unique_genome_df.sort_values(by="overlap_score", ascending=False)
+unique_genome_df.to_csv("output/full_statistics_genome_results.csv")
+
+final_output_df = unique_genome_df[["fused_gene", "fused_product", "fused_gene_len", "subject_title", "subject_length", "alignment_length", "coverage_gene_1", "coverage_gene_2", "overlap_score", "percentage_of_identical_matches"]]
+final_output_df = final_output_df.sort_values(by="overlap_score", ascending=False)
+final_output_df.to_csv("output/final_genome_results.csv") 
+print("Your results are ready.")
