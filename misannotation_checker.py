@@ -1,10 +1,8 @@
 import argparse
 from Bio import SeqIO
 from Bio.Seq import Seq
-import matplotlib
-matplotlib.use('TkAgg')  # Use the TkAgg backend for GUI environments
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
+import numpy as np
 import os
 import pyranges as pr
 import pandas as pd
@@ -341,21 +339,31 @@ def diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_p
     
     # Merging the diamond results dataframe with the fused protein dataframe. Had to use a weird gimmicky solution I found to keep the original order preserved.
     fused_diamond_df = fused_prot_df.merge(fused_prot_df.merge(diamond_df, how='outer', on='fused_gene', sort=False))
+    # Splitting up the subject_title column
+    fused_diamond_df[["subject_XP", "subject_product", "subject_organism"]] = fused_diamond_df["subject_title"].str.extract(r"(XP_[\d\.]+)\s(.+)\s\[(.+)\]")
+    fused_diamond_df = fused_diamond_df.drop(columns=["subject_title"])
     fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv", sep="\t")
     
     # Applying the identity cutoff filter inputted by the user as well as filtering to only keep hits with overlaps between the two gene parts.
-    # Last filter is to check if an entry has an alignment start before the gene_1_len
     filtered_fused_diamond_df = fused_diamond_df[(fused_diamond_df["start_of_alignment_in_query"] < fused_diamond_df["gene_1_len"]) &
                                                  (fused_diamond_df["end_of_alignment_in_query"] > fused_diamond_df["gene_1_len"]) & 
                                                  (fused_diamond_df["percentage_of_identical_matches"] > ident_cutoff)
                                                  ].copy()
-
     
-    # Creating an overlap column to show how much overlap there is. The greater the overlap, the better in general.
+    # Creating overlap scores for all genes to create a distribution plot. This will ignore pident and whether there are overlaps or not. No overlaps = 0 overlap score.
+    fused_overlap_df = fused_diamond_df.copy()
+    fused_overlap_df.loc[:, "coverage_gene_1"] = ((fused_overlap_df["gene_1_len"] - fused_overlap_df["start_of_alignment_in_query"]) / fused_overlap_df["gene_1_len"])
+    fused_overlap_df.loc[:, "coverage_gene_2"] = ((fused_overlap_df["end_of_alignment_in_query"] - (fused_overlap_df["gene_1_len"] + 1)) / fused_overlap_df["gene_2_len"])
+    fused_overlap_df.loc[:, "overlap_score"] = ((fused_overlap_df["coverage_gene_1"] + fused_overlap_df["coverage_gene_2"]) / 2)                                                       
+    fused_overlap_df.loc[(fused_overlap_df["coverage_gene_1"] <= 0) | (fused_overlap_df["coverage_gene_2"] <= 0), "overlap_score"] = 0
+    fused_overlap_df = fused_overlap_df.groupby('fused_gene').first().reset_index()
+    
+    # Creating overlap scores for one's that we know have an overlap for easier viewing for the user. These are the average of each gene's coverage within the alignment.
     filtered_fused_diamond_df.loc[:, "coverage_gene_1"] = ((filtered_fused_diamond_df["gene_1_len"] - filtered_fused_diamond_df["start_of_alignment_in_query"]) / filtered_fused_diamond_df["gene_1_len"])
     filtered_fused_diamond_df.loc[:, "coverage_gene_2"] = ((filtered_fused_diamond_df["end_of_alignment_in_query"] - (filtered_fused_diamond_df["gene_1_len"] + 1)) / filtered_fused_diamond_df["gene_2_len"])
     filtered_fused_diamond_df.loc[:, "overlap_score"] = ((filtered_fused_diamond_df["coverage_gene_1"] + filtered_fused_diamond_df["coverage_gene_2"]) / 2)                                                       
     filtered_fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_full_filtered_fused_diamond.csv")
+    
     
     # Creating a dataframe that takes the greatest match for each alignment after filtering for easy viewing.
     unique_filtered_fused_diamond_df = filtered_fused_diamond_df.groupby('fused_gene').first().reset_index()
@@ -363,50 +371,26 @@ def diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_p
     
     os.remove(temp_fasta_path)
     
-    return unique_filtered_fused_diamond_df
+    return unique_filtered_fused_diamond_df, fused_overlap_df
 
-def get_overlap_distribution_cutoff(df):
-    """Function that displays a distribution plot of the overlap region sizes identified in the data frame and then allows the user to select a cutoff range with a slider. Returns
-    a data frame with the cutoff value used as a filter in the overlap region column."""
+def plot_genome_overlap_scores(df):
+    """Function that displays a distribution plot of the overlap scores in the data frame. Returns a histogram of the data to the user."""
     
-    print("Please select the overlap region size cutoff you would like to use for filtering. Use the slider to select the cutoff value. Exit out of the plot when finished.")
-        
-    # Creating the number of bins following the square root rule.
-    # num_bins = int(len(df["overlap_region"])**0.5)
-    
-    # Creating the plot and its objects.
-    fig, ax = plt.subplots(figsize=(8,5))
-    plt.subplots_adjust(bottom=0.2)
-    n, bins, patches = ax.hist(df["overlap_region"], bins="auto", edgecolor="black", alpha=0.7)
-    ax.set_title("Distribution of Overlap Region Sizes")
-    ax.set_xlabel("Overlap Region Size")
-    ax.set_ylabel("Frequency")
-    ax.grid(axis="y", alpha=0.75)
-    
-    # Adding a vertical line to serve as the cutoff demarcation.
-    cutoff_line = ax.axvline(x=0, color="red", linestyle="--", label="Cutoff")
-    ax.legend()
-    
-    # Creating the slider for the user to select the cutoff.
-    ax_slider = plt.axes([0.2, 0.05, 0.6, 0.03]) # Position of the slider.
-    slider = Slider(ax_slider, "Cutoff", df["overlap_region"].min(), df["overlap_region"].max(), valinit=0)
-    
-    # Creating a function that updates the slider when moved.
-    def update(val):
-        cutoff = slider.val
-        cutoff_line.set_xdata([cutoff, cutoff]) # Updating the vertical line.
-        fig.canvas.draw_idle() # Redrawing the figure.
-        
-    slider.on_changed(update) # Linking the slider's movement to the update function.
-    
+    # Using Freedman-Diaconis Rule for number of bins in a histogram as it is ideal for larger datasets with variability
+    q75, q25 = np.percentile(df["overlap_score"], [75, 25])
+    iqr = q75 - q25
+    n = len(df)
+    bin_width = 2 * iqr / (n ** (1/3))
+    num_bins = int(np.ceil((df["overlap_score"].max() - df["overlap_score"].min()) / bin_width))
+                               
+    plt.figure(figsize=(8, 5))
+    plt.hist(df["overlap_score"], bins=num_bins, edgecolor="black", alpha=0.7)
+    plt.title("Distribution of Overlap Scores")
+    plt.xlabel("Overlap Score")
+    plt.ylabel("Frequency")
+    plt.grid(axis="y", alpha=0.75)
     plt.show()
-    
-    cutoff_value = slider.val
-    filtered_df = df[df["overlap_region"] >= cutoff_value]
-    
-    print(f"A cutoff value of {cutoff_value:.0f} was selected.")
-    
-    return filtered_df
+    # plt.savefig("genome_overlap_score_distribution.png", dpi=300)
     
     
 # Establishing command-line arguments
@@ -419,6 +403,7 @@ parser = argparse.ArgumentParser(
                     with genomes containing assembled chromosomes. This program is not compatible with scaffolded genomes. The program will also ask the
                     user for the prefixes associated with their chromosomes. These can be found at the bottom of your genome's NCBI website page, under the
                     chromosome section.""")
+parser.add_argument('-n', '--organism_name', help="Input the organism's scientific name. This input is required. Example: 'Schistocerca gregaria'", required=True, type=str)
 parser.add_argument('-g', '--organism_genome', help="""Input the organism's genome in a fasta format. This should be a RefSeq genome. This input is required.""", required=True, type=str)
 parser.add_argument('-a', '--organism_annotation', help="""Input the organism's annotation features in a gff format. This should be a RefSeq annotation. This input is required.""", required=True, type=str)
 parser.add_argument('-db', '--database', help="""Input the local reference protein database in a dmnd format. This input is required.""", required=True, type=str)
@@ -432,6 +417,7 @@ args = parser.parse_args()
 
 # Establishing variables from args.
 cwd = os.getcwd()
+name = args.organism_name.strip().lower()
 genome = args.organism_genome
 annotation = args.organism_annotation
 diamond_path = shutil.which("diamond")
@@ -463,6 +449,9 @@ filtered_gff = gff_manipulator(gff, selected_chrom_list)
 # A list to store each chromosome strand's top gene alignments.
 fused_hits_genome_df_list = []
 
+# A list to store genome overlaps for distribution plot
+fused_overlap_df_list = []
+
 # Initializing a progress bar for tracking the program's status.
 total_steps = len(selected_chrom_list) * 4 # For each chromosome, there are two strands. For each strand, there are two steps (processing and protein alignment).
 with tqdm(total=total_steps, unit="step") as pbar:
@@ -485,18 +474,25 @@ with tqdm(total=total_steps, unit="step") as pbar:
             pbar.update(1)
             
             pbar.set_description(f"Running DIAMOND on {chrom} {strand_name} strand's fused genes")
-            unique_chrom_strand_df = diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db, 
-                                                      num_threads, ident_cutoff, output_prefix)
+            unique_chrom_strand_df, fused_overlap_chrom_strand_df = diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db, 
+                                                                                      num_threads, ident_cutoff, output_prefix)
             pbar.update(1)
             fused_hits_genome_df_list.append(unique_chrom_strand_df)
+            fused_overlap_df_list.append(fused_overlap_chrom_strand_df)
+
+# Compiling all fused overlaps to have one dataframe that contains genome-wide results to display a distribution plot to the user.
+# genome_overlap_df = pd.concat(fused_overlap_df_list, ignore_index=True)
+# plot_genome_overlap_scores(genome_overlap_df)
+# need to work on this
 
 # Compiling all unique gene alignments to have one dataframe that contains genome-wide results.
 unique_genome_df = pd.concat(fused_hits_genome_df_list, ignore_index=True)
-
+unique_genome_df = unique_genome_df[unique_genome_df["subject_organism"].str.lower() != name] # Filtering out hits to own organism
 unique_genome_df = unique_genome_df.sort_values(by="overlap_score", ascending=False)
 unique_genome_df.to_csv("output/full_statistics_genome_results.csv")
 
-final_output_df = unique_genome_df[["fused_gene", "fused_product", "fused_gene_len", "subject_title", "subject_length", "alignment_length", "coverage_gene_1", "coverage_gene_2", "overlap_score", "percentage_of_identical_matches"]]
+# Making it look pretty
+final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_XP", "subject_product", "subject_organism", "fused_gene_len", "gene_1_len", "gene_2_len", "subject_length", "alignment_length", "coverage_gene_1", "coverage_gene_2", "overlap_score", "percentage_of_identical_matches"]]
 final_output_df = final_output_df.sort_values(by="overlap_score", ascending=False)
 final_output_df.to_csv("output/final_genome_results.csv") 
 print("Your results are ready.")
