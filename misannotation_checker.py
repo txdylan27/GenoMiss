@@ -39,7 +39,7 @@ def chromosome_parser(gff):
     genome. Returns a filtered chromosome list."""
     
     unfiltered_chrom_list = gff["Chromosome"].unique().tolist() # Getting a list of all of the unique chromosome identifiers present in the annotation file.
-    while True:
+    while True: # TODO: Is this necessary?
         try:
             chrom_input = input("Input the chromsome prefixes - comma-separated - listed by RefSeq on the NCBI entry for your genome: ")
             if not chrom_input:
@@ -296,19 +296,22 @@ def unfused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, d
     with open(temp_fasta_path, "w") as temp_fasta:
         for prot in prot_output_df.itertuples(index=False):
             temp_fasta.write(f">{prot.gene} {prot.product_name}\n{prot.sequence}\n")
+            #TODO: FILTER OUT BAD GENES (NO AA SEQUENCE OR VERY SMALL)
             
     diamond_output = f"{output_prefix}/{chrom}_{strand_name}_control_diamond_results.tsv"
     diamond_command = [diamond_path, "blastp", "--db", db, "--query", temp_fasta_path, "--out", diamond_output, 
                        "--outfmt", "6", "qseqid", "qlen", "sseqid", "slen", "qstart", "qend", "sstart", "send",
                        "pident", "nident", "mismatch", "evalue", "bitscore", "length", "qcovhsp", "scovhsp", "qtitle", "stitle",
                        "--header", "--evalue", "1e-5", "--threads", num_threads]
-    
+
     try:
-        subprocess.run(diamond_command, check=True, text=True, capture_output=True)
-    except subprocess.CalledProcessError:
+        result = subprocess.run(diamond_command, check=True, text=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
         print(f"Error during DIAMOND execution for {chrom}, {strand_name} strand.")
+        print(f"DIAMOND stderr: {e.stderr}")
+        print(f"DIAMOND stdout: {e.stdout}")
         raise
-        
+
     headers = ["gene", "query_length", "subject_id", "subject_length", "start_of_alignment_in_query", "end_of_alignment_in_query", 
                "start_of_alignment_in_subject", "end_of_alignment_in_subject", "percentage_of_identical_matches", "number_of_identical_matches", 
                "number_of_mismatches", "expected_value", "bit_score", "alignment_length", "query_coverage", "subject_coverage", 
@@ -327,8 +330,8 @@ def unfused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, d
     
 def fused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db, num_threads, ident_cutoff, output_prefix):
     """Function used to fuse neigboring genes and run the DIAMOND protein alignment script on the fused genes. Returns a dataframe containing unique genes that
-    fit the user-inputted filtering criteria."""   
-    
+    fit the user-inputted filtering criteria."""
+    # TODO: FILTER OUT BAD GENES (NO AA SEQUENCE OR VERY SMALL)
     temp_fasta_path = f"{output_prefix}/temp_fasta.faa" # The input for DIAMOND is a fasta file. Therefore, need to convert the protein dataframe into a fasta format.
     fused_prot_df_list = [] # This list will be used to store information about the fused proteins.
     
@@ -358,14 +361,16 @@ def fused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, dia
                        "--outfmt", "6", "qseqid", "qlen", "sseqid", "slen", "qstart", "qend", "sstart", "send",
                        "pident", "nident", "mismatch", "evalue", "bitscore", "length", "qcovhsp", "scovhsp", "qtitle", "stitle",
                        "--header", "--evalue", "1e-5", "--threads", num_threads]
-    
+
     # Running the diamond command via subprocess.
     try:
-        subprocess.run(diamond_command, check=True, text=True, capture_output=True)
-    except subprocess.CalledProcessError:
+        result = subprocess.run(diamond_command, check=True, text=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
         print(f"Error during DIAMOND execution for {chrom}, {strand_name} strand.")
+        print(f"DIAMOND stderr: {e.stderr}")
+        print(f"DIAMOND stdout: {e.stdout}")
         raise
-    
+
     # As the diamond headers are very obfuscated, included proper header titles.
     headers = ["fused_gene", "query_length", "subject_id", "subject_length", "start_of_alignment_in_query", "end_of_alignment_in_query", 
                "start_of_alignment_in_subject", "end_of_alignment_in_subject", "percentage_of_identical_matches", "number_of_identical_matches", 
@@ -451,7 +456,9 @@ parser = argparse.ArgumentParser(
                     user for the prefixes associated with their chromosomes. These can be found at the bottom of your genome's NCBI website page, under the
                     chromosome section.""")
 # parser.add_argument('-n', '--organism_name', help="Input the organism's scientific name. This input is required. Example: 'Schistocerca gregaria'", required=True, type=str)
-parser.add_argument('-g', '--organism_genome', help="""Input the organism's genome in a fasta format. This should be a RefSeq genome. This input is required.""", required=True, type=str)
+# TODO: ^^^ get it to not match to itself
+#parser.add_argument('-g', '--organism_genome', help="""Input the organism's genome in a fasta format. This should be a RefSeq genome. This input is required.""", required=True, type=str)
+# TODO: Take in Organism proteome as argument instead
 parser.add_argument('-a', '--organism_annotation', help="""Input the organism's annotation features in a gff format. This should be a RefSeq annotation. This input is required.""", required=True, type=str)
 parser.add_argument('-db', '--database', help="""Input the local reference protein database in a dmnd format. This input is required.""", required=True, type=str)
 parser.add_argument('-t', '--num_threads', help="""Input the number of threads that you would like to use. By default, half of your available threads
@@ -468,6 +475,7 @@ cwd = os.getcwd()
 genome = args.organism_genome
 annotation = args.organism_annotation
 diamond_path = shutil.which("diamond")
+#TODO: Stop if diamond is not detected
 db = args.database
 num_threads = str(args.num_threads)
 ident_cutoff = float(args.identity_cutoff) * 100
@@ -519,7 +527,7 @@ with tqdm(total=total_steps, unit="step") as pbar:
             pbar.set_description(f"Processing {chrom} {strand_name} strand")
             prot_output_df = chromosome_processor(chrom, strand, strand_name, idx_genome, filtered_gff, output_prefix)
             pbar.update(1)
-            
+            #The control is to see if the alignment score increases in the fused gene vs the unfused genes
             pbar.set_description(f"Running control DIAMOND on {chrom} {strand_name} strand's unfused genes")
             unique_unfused_chrom_strand_df = unfused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db, 
                                                                                       num_threads, ident_cutoff, output_prefix)
