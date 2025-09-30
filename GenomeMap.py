@@ -1,0 +1,76 @@
+from typing import Dict, List, Optional
+
+"""
+Object Class GeneNode represents a single Gene, all of its protein isoforms, and any directly neighboring genes downstream of the 
+current strand.
+"""
+class GeneNode:
+    def __init__(
+            self,
+            gene_id: str,
+            protein_isoforms: Dict[str, str] = None,
+            neighbors: List['GeneNode'] = None
+    ):
+        self.gene_id: str = gene_id
+        self.protein_isoforms: Dict[str, str] = protein_isoforms if protein_isoforms is not None else {}
+        self.neighbors: List['GeneNode'] = neighbors if neighbors is not None else []
+
+    def add_neighbor(self, neighbor: 'GeneNode') -> None:
+        """Add a neighboring GeneNode."""
+        if neighbor not in self.neighbors:
+            self.neighbors.append(neighbor)
+
+    def add_protein_isoform(self, key: str, value: str) -> None:
+        """Add or update a protein isoform."""
+        self.protein_isoforms[key] = value
+
+    def __repr__(self) -> str:
+        return f"GeneNode(gene_id='{self.gene_id}', protein_isoforms={self.protein_isoforms}, neighbors={len(self.neighbors)})"
+
+"""
+Class GenomeMap keeps track of the head GeneNode of the positive and negative strand of each chromosome for an organism.
+"""
+class GenomeMap:
+    def __init__(self, organism_name: str):
+        self.organism_name: str = organism_name
+        self.chromosomes: Dict[str, Dict[str, Optional[GeneNode]]] = {}
+
+    def add_chromosome(self, chromosome_id: str) -> None:
+        """Add a chromosome with positive and negative strand head nodes."""
+        if chromosome_id not in self.chromosomes:
+            self.chromosomes[chromosome_id] = {
+                '+': None,
+                '-': None
+            }
+
+    def set_head_node(self, chromosome_id: str, strand: str, head_node: GeneNode) -> None:
+        """Set the head node for a specific chromosome strand.
+
+        Args:
+            chromosome_id: The chromosome identifier (e.g., 'chr1', '1', 'X')
+            strand: Either '+' or '-'
+            head_node: The GeneNode to set as the head
+        """
+        if strand not in ['+', '-']:
+            raise ValueError("Strand must be '+' or '-'")
+
+        if chromosome_id not in self.chromosomes:
+            self.add_chromosome(chromosome_id)
+
+        self.chromosomes[chromosome_id][strand] = head_node
+
+    def get_head_node(self, chromosome_id: str, strand: str) -> Optional[GeneNode]:
+        """Get the head node for a specific chromosome strand."""
+        if strand not in ['+', '-']:
+            raise ValueError("Strand must be '+' or '-'")
+
+        if chromosome_id in self.chromosomes:
+            return self.chromosomes[chromosome_id][strand]
+        return None
+
+    def list_chromosomes(self) -> list:
+        """Return a list of all chromosome IDs in the genome."""
+        return list(self.chromosomes.keys())
+
+    def __repr__(self) -> str:
+        return f"Genome(organism='{self.organism_name}', chromosomes={len(self.chromosomes)})"

@@ -13,6 +13,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 from tqdm import tqdm
+import GenomeMap
 
 # Defining all functions for the program
 def get_default_num_threads():
@@ -327,7 +328,6 @@ def unfused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, d
     unique_diamond_df = unique_diamond_df.loc[unique_diamond_df.groupby('gene')['percentage_of_identical_matches'].idxmax()]
     unique_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_control_unique_diamond_results.tsv", sep="\t", header=True, index=True)
     
-    
 def fused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db, num_threads, ident_cutoff, output_prefix):
     """Function used to fuse neigboring genes and run the DIAMOND protein alignment script on the fused genes. Returns a dataframe containing unique genes that
     fit the user-inputted filtering criteria."""
@@ -443,6 +443,9 @@ def fused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, dia
     os.remove(temp_fasta_path)
     
     return filtered_df
+
+def build_genomemap(proteomeFile, gffFile):
+    pass
 
     
 # Establishing command-line arguments
