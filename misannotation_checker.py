@@ -461,7 +461,7 @@ parser = argparse.ArgumentParser(
 # parser.add_argument('-n', '--organism_name', help="Input the organism's scientific name. This input is required. Example: 'Schistocerca gregaria'", required=True, type=str)
 # TODO: ^^^ get it to not match to itself
 #parser.add_argument('-g', '--organism_genome', help="""Input the organism's genome in a fasta format. This should be a RefSeq genome. This input is required.""", required=True, type=str)
-# TODO: Take in Organism proteome as argument instead
+parser.add_argument('-p',"--proteome", help="The filename of the .faa file containing the proteome of the organism of interest. Required input.", required=True, type=str)
 parser.add_argument('-a', '--organism_annotation', help="""Input the organism's annotation features in a gff format. This should be a RefSeq annotation. This input is required.""", required=True, type=str)
 parser.add_argument('-db', '--database', help="""Input the local reference protein database in a dmnd format. This input is required.""", required=True, type=str)
 parser.add_argument('-t', '--num_threads', help="""Input the number of threads that you would like to use. By default, half of your available threads
@@ -478,8 +478,12 @@ cwd = os.getcwd()
 genome = args.organism_genome
 annotation = args.organism_annotation
 diamond_path = shutil.which("diamond")
-#TODO: Stop if diamond is not detected
+if diamond_path is None:
+    print("diamond not found in PATH, please check your installation")
+    exit()
+
 db = args.database
+proteome_file = args.proteome
 num_threads = str(args.num_threads)
 ident_cutoff = float(args.identity_cutoff) * 100
 
