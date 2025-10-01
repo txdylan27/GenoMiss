@@ -1,4 +1,6 @@
 import argparse
+from email.policy import default
+
 from Bio import SeqIO
 from Bio.Seq import Seq
 import matplotlib.pyplot as plt
@@ -13,7 +15,11 @@ import time
 import tkinter as tk
 from tkinter import ttk
 from tqdm import tqdm
+import regex as re
 import GenomeMap
+
+# FLAGS AND GLOBAL VARIABLES
+ORGANISM_NAME_DETECTED = False
 
 # Defining all functions for the program
 def get_default_num_threads():
@@ -444,121 +450,232 @@ def fused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, dia
     
     return filtered_df
 
-def build_genomemap(proteomeFile, gffFile):
+def detect_organism_name(gffFile):
+    global ORGANISM_NAME_DETECTED # necessary to tell later assignment to change outside global variable
+    with open(gffFile) as gff:
+        headers_only = [line for line in gff if line.startswith('#')]
+        for header in headers_only:
+            regex_result = re.search(r'NCBI\s+(.+?)\s+Annotation', header)
+            if regex_result:
+                organism_name = regex_result.group(1)
+                print("Detected Organism Name: " + organism_name)
+                ORGANISM_NAME_DETECTED = True
+                return organism_name
+    print("Organism name ")
+    return None #If organism name is not found, ORGANISM_NAME_DETECTED will remain false
+
+def get_chromosome_names(gffFile):
+    # Alternative apporach would be to use pandas to create a dataframe and then use df['seqid'].unique(), but this is
+    # faster computationally and more memory efficient.
+    chromosomes = set()
+    with open(gffFile) as gff:
+        for line in gff:
+            if not line.startswith('#'):
+                seqid = line.split('\t')[0]
+                chromosomes.add(seqid)
+    return list(chromosomes)
+
+def count_genes_per_chromosome(gffFile):
+    gene_counts = {}
+
+    with open(gffFile) as gff:
+        for line in gff:
+            if not line.startswith('#'):
+                fields = line.split('\t')
+                seqid = fields[0]
+                feature_type = fields[2]
+
+                # Count only gene features
+                if feature_type == 'gene':
+                    gene_counts[seqid] = gene_counts.get(seqid, 0) + 1
+
+    return gene_counts
+
+def genecount_filtered_chromosomes(gffFile, minGenePerX):
+    x_w_counts = count_genes_per_chromosome(gffFile)
+    return [x for x in x_w_counts if x_w_counts[x] > minGenePerX]
+
+def build_genomemap(organismName, proteomeFile, gffFile, minGenePerX):
+    genomemap = GenomeMap.GenomeMap(organismName)
+    genomemap.chromosomes = genecount_filtered_chromosomes(gffFile, minGenePerX)
+    # TODO: iteravely build nodes from each Head node
     pass
 
-    
-# Establishing command-line arguments
-parser = argparse.ArgumentParser(
-                    prog="Genome Misannotation Checker",
-                    description="""This program takes an organism's annotation and genome files, extracts the amino acid sequences of all 
-                    proteins in a sequential manner from the genome by chromosome and strand, then fuses neighboring gene sequences. These fused 
-                    sequences are then aligned with a local reference protein database using the command-line protein alignment tool DIAMOND. 
-                    Based on user-inputted criteria, potential misannotated genes are returned to the user in a CSV format. This program only works
-                    with genomes containing assembled chromosomes. This program is not compatible with scaffolded genomes. The program will also ask the
-                    user for the prefixes associated with their chromosomes. These can be found at the bottom of your genome's NCBI website page, under the
-                    chromosome section.""")
-# parser.add_argument('-n', '--organism_name', help="Input the organism's scientific name. This input is required. Example: 'Schistocerca gregaria'", required=True, type=str)
-# TODO: ^^^ get it to not match to itself
-#parser.add_argument('-g', '--organism_genome', help="""Input the organism's genome in a fasta format. This should be a RefSeq genome. This input is required.""", required=True, type=str)
-parser.add_argument('-p',"--proteome", help="The filename of the .faa file containing the proteome of the organism of interest. Required input.", required=True, type=str)
-parser.add_argument('-a', '--organism_annotation', help="""Input the organism's annotation features in a gff format. This should be a RefSeq annotation. This input is required.""", required=True, type=str)
-parser.add_argument('-db', '--database', help="""Input the local reference protein database in a dmnd format. This input is required.""", required=True, type=str)
-parser.add_argument('-t', '--num_threads', help="""Input the number of threads that you would like to use. By default, half of your available threads
-                    will be used.""", default = get_default_num_threads(), type=int)
-parser.add_argument('-i', '--identity_cutoff', help="""Input the percent identity cutoff you would like to use for filtering of the fused gene alignments.
-                    The percent identity is the percentage of identical amino acids between two sequences at the same alignment positions. The default is 0.00.""",
-                    default = 0.00, type=float)
+# Wrapping the main script code in main lets us use the other functions in other scripts without calling the whole thing.
+if __name__ == "__main__":
+    # Argument method validators
+    def valid_file(filepath):
+        """Validates that the file exists and is readable"""
+        if not os.path.isfile(filepath):
+            raise argparse.ArgumentTypeError(f"File '{filepath}' does not exist")
+        return filepath
 
-args = parser.parse_args()
+    def valid_faa_file(filepath):
+        """Validates .faa proteome file"""
+        filepath = valid_file(filepath)
+        if not filepath.endswith('.faa'):
+            raise argparse.ArgumentTypeError(f"Proteome file must be a .faa file")
+        return filepath
 
-# Establishing variables from args.
-cwd = os.getcwd()
-# name = args.organism_name.strip().lower()
-genome = args.organism_genome
-annotation = args.organism_annotation
-diamond_path = shutil.which("diamond")
-if diamond_path is None:
-    print("diamond not found in PATH, please check your installation")
-    exit()
+    def valid_gff_file(filepath):
+        """Validates .gff annotation file"""
+        filepath = valid_file(filepath)
+        if not filepath.endswith('.gff'):
+            raise argparse.ArgumentTypeError(f"Annotation file must be a .gff file")
+        return filepath
 
-db = args.database
-proteome_file = args.proteome
-num_threads = str(args.num_threads)
-ident_cutoff = float(args.identity_cutoff) * 100
+    def valid_dmnd_file(filepath):
+        """Validates .dmnd database file"""
+        filepath = valid_file(filepath)
+        if not filepath.endswith('.dmnd'):
+            raise argparse.ArgumentTypeError(f"Database file must be a .dmnd file")
+        return filepath
 
-# Storing the command-line arguments inputted by the user in a log file for future reference by the user.
-if not os.path.exists("output"):
-    os.makedirs("output")
-with open("output/args.log", 'w') as log_file:
-    log_file.write("Command-line input:\n")
-    log_file.write(" ".join(sys.argv) + "\n")
+    def positive_int(value):
+        """Validates positive integer"""
+        ivalue = int(value)
+        if ivalue < 1:
+            raise argparse.ArgumentTypeError(f"{value} must be at least 1")
+        return ivalue
 
-# Loading in the organism's genome and annotation.
-os.chdir(cwd)
-start_time = time.time()
-idx_genome, gff = genome_loader(genome, annotation)
-end_time = time.time()
-print(f"It took {end_time - start_time:0.2f} seconds to load the provided genome.")
+    def percent_identity(value):
+        """Validates percent identity is between 0.0 and 100.0"""
+        fvalue = float(value)
+        if not 0.0 <= fvalue <= 100.0:
+            raise argparse.ArgumentTypeError(f"Identity cutoff must be between 0.0 and 100.0, got {value}")
+        return fvalue
 
-# Determining the chromosome format within the genome, returning a list of them which has been curated by the user, and then filtering the gff df based on it.
-filtered_chrom_list = chromosome_parser(gff)
-selected_chrom_list = chromosome_selector(filtered_chrom_list)
+    def min_gene_count(value):
+        """Validates minimum gene count filter"""
+        ivalue = int(value)
+        if ivalue < 1:
+            raise argparse.ArgumentTypeError(f"Gene count filter must be at least 1, got {value}")
+        return ivalue
+    # Argparse setup
+    parser = argparse.ArgumentParser(prog="Genome Misannotation Checker")
 
-# Manipulating the df for iteration
-filtered_gff = gff_manipulator(gff, selected_chrom_list)
+    parser.add_argument('-p', "--proteome",
+                        help="The filename of the .faa file containing the proteome of the organism of interest. Required input.",
+                        required=True,
+                        type=valid_faa_file)
 
-# A list to store each chromosome strand's top gene alignments.
-fused_hits_genome_df_list = []
+    parser.add_argument('-a', '--organism_annotation',
+                        help="Input the organism's annotation features in a gff format. This should be a RefSeq annotation. This input is required.",
+                        required=True,
+                        type=valid_gff_file)
 
-# A list to store genome overlaps for distribution plot
-fused_overlap_df_list = []
+    parser.add_argument('-db', '--database',
+                        help="Input the local reference protein database in a dmnd format. This input is required.",
+                        required=True,
+                        type=valid_dmnd_file)
 
-# Initializing a progress bar for tracking the program's status.
-total_steps = len(selected_chrom_list) * 6 # For each chromosome, there are two strands. For each strand, there are two steps (processing and protein alignment).
-with tqdm(total=total_steps, unit="step") as pbar:
-    
-    # Going into each strand of each chromosome, getting each protein's sequence, fusing neighboring genes, then using DIAMOND to check for misannotations.
-    for chrom in selected_chrom_list:
-        for strand in ["+", "-"]:
-            # Avoiding use of + in file names since it is a no no in the rubric :)
-            if strand == "+":
-                strand_name = "plus"
-            elif strand == "-":
-                strand_name = "neg"
-            
-            output_prefix = f"output/{chrom}/{strand_name}"  # Setting up the output file path.
-            if not os.path.exists(output_prefix):
-                os.makedirs(output_prefix)
-            
-            pbar.set_description(f"Processing {chrom} {strand_name} strand")
-            prot_output_df = chromosome_processor(chrom, strand, strand_name, idx_genome, filtered_gff, output_prefix)
-            pbar.update(1)
-            #The control is to see if the alignment score increases in the fused gene vs the unfused genes
-            pbar.set_description(f"Running control DIAMOND on {chrom} {strand_name} strand's unfused genes")
-            unique_unfused_chrom_strand_df = unfused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db, 
-                                                                                      num_threads, ident_cutoff, output_prefix)
-            pbar.update(1)
-            
-            pbar.set_description(f"Running DIAMOND on {chrom} {strand_name} strand's fused genes")
-            unique_fused_chrom_strand_df = fused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db, 
-                                                                                      num_threads, ident_cutoff, output_prefix)
-            pbar.update(1)
-            
-            fused_hits_genome_df_list.append(unique_fused_chrom_strand_df)
+    parser.add_argument('-t', '--num_threads',
+                        help="Input the number of threads that you would like to use. By default, half of your available threads will be used.",
+                        default=get_default_num_threads(),
+                        type=positive_int)
 
-# Compiling all unique gene alignments to have one dataframe that contains genome-wide results.
-unique_genome_df = pd.concat(fused_hits_genome_df_list, ignore_index=True)
-# unique_genome_df = unique_genome_df[unique_genome_df["subject_organism"].str.lower() != name] # Filtering out hits to own organism this line problematic for some reason
-# unique_genome_df = unique_genome_df.sort_values(by="overlap_score", ascending=False)
-unique_genome_df = unique_genome_df[(unique_genome_df["query_coverage"] > 70) &
-                                    (unique_genome_df["subject_coverage"] > 50)]
-unique_genome_df.to_csv("output/full_statistics_genome_results.csv")
+    parser.add_argument('-i', '--identity_cutoff',
+                        help="Input the percent identity cutoff you would like to use for filtering of the fused gene alignments. The percent identity is the percentage of identical amino acids between two sequences at the same alignment positions. The default is 0.00.",
+                        default=0.00,
+                        type=percent_identity)
 
-# Making it look pretty
-# final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_XP", "subject_product", "subject_organism", "fused_gene_len", "gene_1_len", "gene_2_len", "subject_length", "alignment_length", "coverage_gene_1", "coverage_gene_2", "overlap_score", "percentage_of_identical_matches"]]
-# final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_title", "fused_gene_len", "gene_1_len", "gene_2_len", "subject_length", "alignment_length", "coverage_gene_1", "coverage_gene_2", "overlap_score", "percentage_of_identical_matches"]]
-# final_output_df = final_output_df.sort_values(by="overlap_score", ascending=False)
-#final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_title", ""]]
-#final_output_df.to_csv("output/final_genome_results.csv") 
-print("Your results are ready.")
+    parser.add_argument('-xf', "--xfilter",
+                        help="Filters out all chromosomes and contigs that have less than the specified number of genes (minimum: 1)",
+                        type=min_gene_count,
+                        default=5)
+
+    args = parser.parse_args()
+
+    # Establishing variables from args.
+    cwd = os.getcwd()
+    # name = args.organism_name.strip().lower()
+    genome = args.organism_genome
+    annotation = args.organism_annotation
+    diamond_path = shutil.which("diamond")
+    if diamond_path is None:
+        print("diamond not found in PATH, please check your installation")
+        exit()
+    db = args.database
+    proteome_file = args.proteome
+    num_threads = str(args.num_threads)
+    ident_cutoff = float(args.identity_cutoff) * 100
+    min_geneperx_threshold = args.xfilter
+
+    # Storing the command-line arguments inputted by the user in a log file for future reference by the user.
+    if not os.path.exists("output"):
+        os.makedirs("output")
+    with open("output/args.log", 'w') as log_file:
+        log_file.write("Command-line input:\n")
+        log_file.write(" ".join(sys.argv) + "\n")
+
+    # Loading in the organism's genome and annotation.
+    os.chdir(cwd) #TODO: Get curdir from script file location
+    start_time = time.time()
+    idx_genome, gff = genome_loader(genome, annotation)
+    end_time = time.time()
+    print(f"It took {end_time - start_time:0.2f} seconds to load the provided genome.")
+
+    # Determining the chromosome format within the genome, returning a list of them which has been curated by the user, and then filtering the gff df based on it.
+    # LEGACY CODE: Manually selecting which chromosomes you want
+    filtered_chrom_list = chromosome_parser(gff)
+    selected_chrom_list = chromosome_selector(filtered_chrom_list)
+
+    # UPDATED VERSION: Select chromosomes and scaffolds by gene count
+
+    # Manipulating the df for iteration
+    filtered_gff = gff_manipulator(gff, selected_chrom_list)
+
+    # A list to store each chromosome strand's top gene alignments.
+    fused_hits_genome_df_list = []
+
+    # A list to store genome overlaps for distribution plot
+    fused_overlap_df_list = []
+
+    # Initializing a progress bar for tracking the program's status.
+    total_steps = len(selected_chrom_list) * 6 # For each chromosome, there are two strands. For each strand, there are two steps (processing and protein alignment).
+    with tqdm(total=total_steps, unit="step") as pbar:
+
+        # Going into each strand of each chromosome, getting each protein's sequence, fusing neighboring genes, then using DIAMOND to check for misannotations.
+        for chrom in selected_chrom_list:
+            for strand in ["+", "-"]:
+                # Avoiding use of + in file names since it is a no no in the rubric :)
+                if strand == "+":
+                    strand_name = "plus"
+                elif strand == "-":
+                    strand_name = "neg"
+
+                output_prefix = f"output/{chrom}/{strand_name}"  # Setting up the output file path.
+                if not os.path.exists(output_prefix):
+                    os.makedirs(output_prefix)
+
+                pbar.set_description(f"Processing {chrom} {strand_name} strand")
+                prot_output_df = chromosome_processor(chrom, strand, strand_name, idx_genome, filtered_gff, output_prefix)
+                pbar.update(1)
+                #The control is to see if the alignment score increases in the fused gene vs the unfused genes
+                pbar.set_description(f"Running control DIAMOND on {chrom} {strand_name} strand's unfused genes")
+                unique_unfused_chrom_strand_df = unfused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db,
+                                                                                          num_threads, ident_cutoff, output_prefix)
+                pbar.update(1)
+
+                pbar.set_description(f"Running DIAMOND on {chrom} {strand_name} strand's fused genes")
+                unique_fused_chrom_strand_df = fused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db,
+                                                                                          num_threads, ident_cutoff, output_prefix)
+                pbar.update(1)
+
+                fused_hits_genome_df_list.append(unique_fused_chrom_strand_df)
+
+    # Compiling all unique gene alignments to have one dataframe that contains genome-wide results.
+    unique_genome_df = pd.concat(fused_hits_genome_df_list, ignore_index=True)
+    # unique_genome_df = unique_genome_df[unique_genome_df["subject_organism"].str.lower() != name] # Filtering out hits to own organism this line problematic for some reason
+    # unique_genome_df = unique_genome_df.sort_values(by="overlap_score", ascending=False)
+    unique_genome_df = unique_genome_df[(unique_genome_df["query_coverage"] > 70) &
+                                        (unique_genome_df["subject_coverage"] > 50)]
+    unique_genome_df.to_csv("output/full_statistics_genome_results.csv")
+
+    # Making it look pretty
+    # final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_XP", "subject_product", "subject_organism", "fused_gene_len", "gene_1_len", "gene_2_len", "subject_length", "alignment_length", "coverage_gene_1", "coverage_gene_2", "overlap_score", "percentage_of_identical_matches"]]
+    # final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_title", "fused_gene_len", "gene_1_len", "gene_2_len", "subject_length", "alignment_length", "coverage_gene_1", "coverage_gene_2", "overlap_score", "percentage_of_identical_matches"]]
+    # final_output_df = final_output_df.sort_values(by="overlap_score", ascending=False)
+    #final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_title", ""]]
+    #final_output_df.to_csv("output/final_genome_results.csv")
+    print("Your results are ready.")
