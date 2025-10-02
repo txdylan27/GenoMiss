@@ -491,15 +491,113 @@ def count_genes_per_chromosome(gffFile):
 
     return gene_counts
 
+# Returns a set with all of the chromosomes we are interested in
 def genecount_filtered_chromosomes(gffFile, minGenePerX):
     x_w_counts = count_genes_per_chromosome(gffFile)
-    return [x for x in x_w_counts if x_w_counts[x] > minGenePerX]
+    return {x for x in x_w_counts if x_w_counts[x] > minGenePerX}
 
+# Returns a dictionary of protein ID's to [sequence, description]
+def process_faa(faaFile):
+    faaDict = {}
+    pattern = r'>(\S+)\s+(.+?)(?:\s+\[([^\]]+)\])?$'
+
+    protein_id = None
+    description = None
+    curProt = ""
+
+    with open(faaFile) as faa:
+        for line in faa:
+            if line.startswith('>'):
+                # Save previous protein before starting new one
+                if protein_id:
+                    faaDict[protein_id] = [curProt, description]
+
+                # Reset for new protein
+                curProt = ""
+                match = re.search(pattern, line)
+                if match:
+                    protein_id = match.group(1)
+                    description = match.group(2)
+                    #organism = match.group(3)  # Optional: store if needed
+                else:
+                    print(f"WARNING: Problem parsing line: {line.strip()} in the .faa file!")
+                    protein_id = None
+                    description = None
+            else:
+                # Accumulate sequence, stripping newline
+                curProt += line.strip()
+
+        # Save last protein when the loop is over
+        if protein_id:
+            faaDict[protein_id] = [curProt, description]
+
+    return faaDict
+
+# WIP
 def build_genomemap(organismName, proteomeFile, gffFile, minGenePerX):
     genomemap = GenomeMap.GenomeMap(organismName)
-    genomemap.chromosomes = genecount_filtered_chromosomes(gffFile, minGenePerX)
+    chromosomes = genecount_filtered_chromosomes(gffFile, minGenePerX)
+    proteins = process_faa(proteomeFile)
     # TODO: iteravely build nodes from each Head node
-    pass
+    with open(gffFile) as gff:
+        curChrom = ""
+        curName = ""
+        curStart = -1
+        curEnd = -1
+        curIsos = {} # proteinID: sequence
+        curStrandedness = ''
+        curNode = None
+        curPosNode = None
+        curNegNode = None
+        # Keep track of previous node for cases where genes are overlapping and we need to access old neighbors
+        prevPosNode = None
+        prevNegNode = None
+        for line in gff:
+            if line.startswith('#'):
+                continue
+
+            fields = line.split('\t')
+            seqid = fields[0] # Chromosome or Scaffold ID
+            if seqid not in chromosomes:
+                continue
+            if seqid != curChrom:
+                curChrom = seqid
+                curNode = None
+                curPosNode = None
+                curNegNode = None
+                curStart, curEnd = -1 # TODO: Check necessity of resetting these and other vars
+                # FLAG: NEW X STARTED
+
+            feature_type = fields[2]
+            if feature_type == 'exon':
+                continue
+
+            if feature_type == 'gene':
+                curStart = int(fields[3])
+                curEnd = int(fields[4])
+                curStrandedness = fields[6]
+                gene_id = attr_dict.get('ID')
+                if gene_id:
+                    name = attr_dict.get('Name', gene_id)
+                    # seqid
+                    nuNode = GenomeMap.GeneNode(gene_id, "isoformsss", "neighborss")  #gene_id only immediately required param
+                    if not curNode:
+                        curNode = nuNode
+                    else:
+                        # Check if end of previous gene > start of new gene
+                        curNode.add_neighbor(nuNode)
+                else:
+                    print("ERROR: Failed to obtaine gene_id for: " + line)
+                    exit()
+
+            attributes = fields[8]
+
+            attr_dict = {}
+            for attr in attributes.strip().split(';'):
+                if '=' in attr:
+                    key, value = attr.split('=', 1)
+                    attr_dict[key] = value
+
 
 # Wrapping the main script code in main lets us use the other functions in other scripts without calling the whole thing.
 if __name__ == "__main__":
