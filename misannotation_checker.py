@@ -1,5 +1,6 @@
 import argparse
 from email.policy import default
+import bisect
 
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -533,25 +534,82 @@ def process_faa(faaFile):
 
     return faaDict
 
-# WIP
+def add_edge(upstreamNode: GenomeMap.GeneNode, downstreamNode: GenomeMap.GeneNode):
+    upstreamNode.neighbors.append(downstreamNode)
+
+
+def find_last_nonoverlapping_gene(nodeList, nuNode):
+    for node in reversed(nodeList):
+        if node.end_coord < nuNode.start_coord:
+            return node
+
+
+def process_nextgene(theMap:GenomeMap.GenomeMap, nodeList: list, open_gene_dict: dict, firstNode: bool, fields: list):
+    global nuNode
+    curStart = int(fields[3])
+    curEnd = int(fields[4])
+    curStrandedness = fields[6]
+    attributes = fields[8]
+    attr_dict = {}
+    for attr in attributes.strip().split(';'):
+        if '=' in attr:
+            key, value = attr.split('=', 1)
+            attr_dict[key] = value
+    gene_id = attr_dict.get('gene') or attr_dict.get('Name') or attr_dict.get('locus_tag')
+
+    if gene_id:
+        #name = attr_dict.get('Name', gene_id)
+        nuNode = GenomeMap.GeneNode(gene_id, curStart, curEnd)
+        if firstNode:
+            curNode = nuNode
+            theMap.set_head_node(fields[0], curStrandedness, curNode)
+            firstNode = False
+        else:# Check open genes
+            genes_that_got_closed = []
+            # Open genes are all genes that don't have a forward connection yet
+            for open_gene in open_gene_dict[curStrandedness]:
+                if nuNode.start_coord > open_gene.end_coord:
+                    add_edge(open_gene, nuNode)
+                    genes_that_got_closed.append(open_gene)
+                else: # If we were unable to connect one of the open genes, add an additional connection to the last gene without an overlap
+                    backconnect_node = find_last_nonoverlapping_gene(nodeList, nuNode)
+                    if backconnect_node:
+                        add_edge(backconnect_node, nuNode)
+                    else:
+                        # Edge case: First two genes on chromosome/strand overlap. No non-overlapping gene exists to backconnect to.
+                        # Connect to overlapping gene anyway to ensure all non-head nodes have incoming edges.
+                        add_edge(open_gene, nuNode)
+                        genes_that_got_closed.append(open_gene)
+            for closedGene in genes_that_got_closed:
+                open_gene_dict[curStrandedness].remove(closedGene)
+
+        # Add current node to the open_gene_dict
+        open_gene_dict[curStrandedness].append(nuNode)
+    else:
+        print("ERROR: Failed to obtain gene_id for: " + "\t".join(fields))
+        exit()
+
+    return nuNode
+
+
+
+
 def build_genomemap(organismName, proteomeFile, gffFile, minGenePerX):
-    genomemap = GenomeMap.GenomeMap(organismName)
+    """
+    The main method for constructing a strand-specific genome graph, showing which genes are considered "connection"
+    candidates to other genes
+    """
     chromosomes = genecount_filtered_chromosomes(gffFile, minGenePerX)
     proteins = process_faa(proteomeFile)
-    # TODO: iteravely build nodes from each Head node
+    theMap = GenomeMap.GenomeMap(organismName)
     with open(gffFile) as gff:
+
         curChrom = ""
-        curName = ""
-        curStart = -1
-        curEnd = -1
-        curIsos = {} # proteinID: sequence
-        curStrandedness = ''
-        curNode = None
-        curPosNode = None
-        curNegNode = None
-        # Keep track of previous node for cases where genes are overlapping and we need to access old neighbors
-        prevPosNode = None
-        prevNegNode = None
+        curNode = GenomeMap.GeneNode
+        first_node_per_strand = {"+": True, "-": True}  # Track first node for each strand separately
+        open_genes = {"+": [], "-": []}
+        nodeList = {"+": [], "-": []}
+
         for line in gff:
             if line.startswith('#'):
                 continue
@@ -562,41 +620,35 @@ def build_genomemap(organismName, proteomeFile, gffFile, minGenePerX):
                 continue
             if seqid != curChrom:
                 curChrom = seqid
+                first_node_per_strand = {"+": True, "-": True}  # Reset for new chromosome
+                nodeList = {"+": [], "-": []}  # Reset node lists for new chromosome
+                open_genes = {"+": [], "-": []} # Reset open_genes too, just in case.
                 curNode = None
-                curPosNode = None
-                curNegNode = None
-                curStart, curEnd = -1 # TODO: Check necessity of resetting these and other vars
-                # FLAG: NEW X STARTED
 
             feature_type = fields[2]
             if feature_type == 'exon':
                 continue
 
             if feature_type == 'gene':
-                curStart = int(fields[3])
-                curEnd = int(fields[4])
-                curStrandedness = fields[6]
-                gene_id = attr_dict.get('ID')
-                if gene_id:
-                    name = attr_dict.get('Name', gene_id)
-                    # seqid
-                    nuNode = GenomeMap.GeneNode(gene_id, "isoformsss", "neighborss")  #gene_id only immediately required param
-                    if not curNode:
-                        curNode = nuNode
-                    else:
-                        # Check if end of previous gene > start of new gene
-                        curNode.add_neighbor(nuNode)
-                else:
-                    print("ERROR: Failed to obtaine gene_id for: " + line)
-                    exit()
+                strand = fields[6]
+                curNode = process_nextgene(theMap, nodeList[strand], open_genes, first_node_per_strand[strand], fields)
+                bisect.insort(nodeList[strand], curNode, key=lambda x: x.end_coord)
+                first_node_per_strand[strand] = False  # Mark that we've seen the first node for this strand
+            if feature_type == 'CDS':
+                attributes = fields[8]
+                attr_dict = {}
+                for attr in attributes.strip().split(';'):
+                    if '=' in attr:
+                        key, value = attr.split('=', 1)
+                        attr_dict[key] = value
+                protein_id = attr_dict.get('Name')
+                if protein_id and protein_id in proteins:
+                    curNode.add_protein_isoform(protein_id, proteins[protein_id])
 
-            attributes = fields[8]
+    return theMap
 
-            attr_dict = {}
-            for attr in attributes.strip().split(';'):
-                if '=' in attr:
-                    key, value = attr.split('=', 1)
-                    attr_dict[key] = value
+
+
 
 
 # Wrapping the main script code in main lets us use the other functions in other scripts without calling the whole thing.

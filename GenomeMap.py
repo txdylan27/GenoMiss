@@ -8,12 +8,16 @@ class GeneNode:
     def __init__(
             self,
             gene_id: str,
-            protein_isoforms: Dict[str, str] = None,
-            neighbors: List['GeneNode'] = None
+            start_coord: int,
+            end_coord: int,
+            protein_isoforms: Dict[str, str] = None, # [ID -> sequence)
+            neighbors: List['GeneNode'] = None,
     ):
         self.gene_id: str = gene_id
         self.protein_isoforms: Dict[str, str] = protein_isoforms if protein_isoforms is not None else {}
         self.neighbors: List['GeneNode'] = neighbors if neighbors is not None else []
+        self.start_coord: int = start_coord
+        self.end_coord: int = end_coord
 
     def add_neighbor(self, neighbor: 'GeneNode') -> None:
         """Add a neighboring GeneNode."""
