@@ -12,21 +12,24 @@ class GeneNode:
             end_coord: int,
             protein_isoforms: Dict[str, str] = None, # [ID -> sequence)
             neighbors: List['GeneNode'] = None,
+            description: str = None
     ):
         self.gene_id: str = gene_id
         self.protein_isoforms: Dict[str, str] = protein_isoforms if protein_isoforms is not None else {}
         self.neighbors: List['GeneNode'] = neighbors if neighbors is not None else []
         self.start_coord: int = start_coord
         self.end_coord: int = end_coord
+        self.description: str = description
 
     def add_neighbor(self, neighbor: 'GeneNode') -> None:
         """Add a neighboring GeneNode."""
         if neighbor not in self.neighbors:
             self.neighbors.append(neighbor)
 
-    def add_protein_isoform(self, key: str, value: str) -> None:
+    def add_protein_isoform(self, key: str, value: list) -> None:
         """Add or update a protein isoform."""
-        self.protein_isoforms[key] = value
+        self.protein_isoforms[key] = value[0]
+        self.description = value[1]
 
     def __repr__(self) -> str:
         return f"GeneNode(gene_id='{self.gene_id}', protein_isoforms={self.protein_isoforms}, neighbors={len(self.neighbors)})"

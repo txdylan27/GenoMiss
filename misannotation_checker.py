@@ -42,61 +42,6 @@ def genome_loader(genome, annotation):
     
     return idx_genome, gff
 
-def chromosome_parser(gff):
-    """Function used to identify the chromosomes within the genome and gff based on the user's input. This can be aided by using NCBI's entry of the user's
-    genome. Returns a filtered chromosome list."""
-    
-    unfiltered_chrom_list = gff["Chromosome"].unique().tolist() # Getting a list of all of the unique chromosome identifiers present in the annotation file.
-    while True: # TODO: Is this necessary?
-        try:
-            chrom_input = input("Input the chromsome prefixes - comma-separated - listed by RefSeq on the NCBI entry for your genome: ")
-            if not chrom_input:
-                raise ValueError("Input cannot be empty. Please enter at least one chromosome prefix.")
-
-            prefix_list = [prefix.strip().upper() for prefix in chrom_input.split(",")] # Create a list of the prefixes provided by the user.
-            
-            chrom_list = [chrom for chrom in unfiltered_chrom_list if any(prefix in chrom for prefix in prefix_list)] # Refine the initial chromosome list based on the user's inputted prefixes.
-            if not chrom_list:
-                print("No chromosomes were found within the organism's annotation with the provided prefixes. Please try again.")
-                continue
-            
-            return chrom_list
-        
-        # Error handling
-        except ValueError as ve:
-            print(f"Input error: {ve}")
-        except Exception as e:
-            print(f"Unexpected error: {e}")
-
-def chromosome_selector(chrom_list):
-    """Function that uses a GUI tool to allow the user to manually check the identified chromosomes before translation and fusion of the genome. Returns
-    a manually selected and filtered chromosome list."""
-    
-    # Creating a list that will store the selected chromosomes by the checkboxes.
-    selected_chrom = []
-    
-    def on_submit():
-        """Function that extracts the selected chromosomes and then closes the GUI."""
-        selected_chrom.extend([chrom for chrom, var in checkboxes.items() if var.get()]) # Adds the chromosome to the list if it is checked once the submit button is pressed.
-        root.destroy() # Close the GUI window
-    
-    # Initialize GUI window
-    root = tk.Tk()
-    root.title("Chromosome Selection")
-    ttk.Label(root, text="""This is a list of chromosomes identified in the annotation file based on the inputted prefixes. Check which chromosomes you
-              would like to keep or remove, such as the mitochondrial chromsome, and then click submit when finished.""").pack(pady=10)
-    checkboxes = {}
-    for chrom in chrom_list:
-        var = tk.BooleanVar(value=True) # Set each chromosome to default as checked.
-        checkbox = ttk.Checkbutton(root, text=chrom, variable=var)
-        checkbox.pack(anchor="w", padx=10, pady=2)
-        checkboxes[chrom] = var
-    submit_button = ttk.Button(root, text="Submit", command=on_submit)
-    submit_button.pack(pady=10)
-    root.mainloop()
-    
-    return selected_chrom
-
 def gff_manipulator(gff, chrom_list):
     """Function containing all manipulations (filterings, sortings, etc.) of the annotation dataframe. Returns a filtered annotation dataframe."""
     
@@ -106,9 +51,9 @@ def gff_manipulator(gff, chrom_list):
     
     return filtered_sorted_gff
 
-def chromosome_processor(chrom, strand, strand_name, genome, gff, flag):
+def chromosome_processor(chrom, strand, headNode, output_prefix):
     """Function that compiles multiple functions to return a dataframe containing all translated proteins for each gene on each chromosome for each strand."""
-    
+
     chrom_seq = genome[chrom].format("fasta") # Going into the indexed genome and retrieving the value (chromosome sequence) relating to the key (chromosome name).
     
     # Manipulating the chromosome sequence by discarding the sequence title line, replacing new line characters, and making the character case uniform.
@@ -132,6 +77,114 @@ def chromosome_processor(chrom, strand, strand_name, genome, gff, flag):
     translated_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_gene2protein.csv", index=False)
     
     return translated_df
+
+def construct_faa_string(proteinID, proteinDescription, proteinSequence):
+    # Handle empty/None description
+    desc = f"{proteinDescription}" if proteinDescription else ""
+    return f">{proteinID} {desc}\n{proteinSequence}\n"
+
+def chromosome_processor_unfused_allisoforms(chrom, strand, headNode: GenomeMap.GeneNode, output_prefix):
+    """
+    Traverse all genes in the chromosome strand graph using BFS (Breadth-First Search).
+    Handles branching paths from overlapping genes and convergence points.
+    """
+    tempFAAstring = ""
+    visited = set()  # Track visited gene_ids to avoid duplicates when paths converge
+    queue = [headNode]  # Initialize queue with head node (BFS uses FIFO)
+
+    while queue:
+        currentNode = queue.pop(0)  # Dequeue: pop from front (BFS: process level-by-level)
+
+        # Skip if we've already processed this gene (handles convergence)
+        if currentNode.gene_id in visited:
+            continue
+        visited.add(currentNode.gene_id)
+
+        # Process all protein isoforms for this gene
+        for isoformID, isoformAA in currentNode.protein_isoforms.items():
+            protString = construct_faa_string(isoformID, currentNode.description, isoformAA)
+            tempFAAstring += protString
+
+        # Enqueue all neighbors (handles branching from overlapping genes)
+        if currentNode.neighbors:
+            queue.extend(currentNode.neighbors)
+
+    temp_fasta_path = f"{output_prefix}/temp_fasta.faa"
+    with open(temp_fasta_path, "w") as temp_fasta:
+        temp_fasta.write(tempFAAstring)
+
+    return temp_fasta_path
+
+def chromosome_processor_fused_allisoforms(chrom, strand, headNode: GenomeMap.GeneNode, output_prefix):
+    """
+    Traverse all genes and create fused proteins between each gene and its neighbors.
+    Uses BFS to handle branching/converging paths from overlapping genes.
+    Creates all possible fusions: each isoform from gene1 × each isoform from gene2.
+    Returns tuple: (temp_fasta_path, metadata_dataframe)
+    """
+    tempFAAstring = ""
+    fused_metadata = []  # Store metadata for each fusion
+    visited_nodes = set()  # Track visited nodes for graph traversal
+    visited_edges = set()  # Track processed edges to avoid duplicate fusions
+    queue = [headNode]
+
+    while queue:
+        currentNode = queue.pop(0)  # BFS: pop from front
+
+        # Skip if we've already visited this node
+        if currentNode.gene_id in visited_nodes:
+            continue
+        visited_nodes.add(currentNode.gene_id)
+
+        # Create fusions with all neighbors
+        if currentNode.neighbors:
+            for neighbor in currentNode.neighbors:
+                # Create unique edge identifier (directed edge)
+                edge = (currentNode.gene_id, neighbor.gene_id)
+
+                # Skip if we've already processed this edge
+                if edge in visited_edges:
+                    continue
+                visited_edges.add(edge)
+
+                # Create all possible isoform combinations (Cartesian product)
+                for isoformID1, isoformAA1 in currentNode.protein_isoforms.items():
+                    for isoformID2, isoformAA2 in neighbor.protein_isoforms.items():
+                        # Fuse IDs with underscore
+                        fusedID = f"{isoformID1}_{isoformID2}"
+                        # Concatenate protein sequences
+                        fusedSequence = isoformAA1 + isoformAA2
+                        # Concatenate descriptions (or use None if either is missing)
+                        fusedDescription = None
+                        if currentNode.description and neighbor.description:
+                            fusedDescription = f"{currentNode.description} + {neighbor.description}"
+
+                        # Store metadata
+                        fused_metadata.append({
+                            "fused_gene": fusedID,
+                            "fused_product": fusedDescription if fusedDescription else f"{isoformID1} + {isoformID2}",
+                            "fused_gene_len": len(fusedSequence),
+                            "gene_1": currentNode.gene_id,
+                            "product_1": isoformID1,
+                            "gene_1_len": len(isoformAA1),
+                            "gene_2": neighbor.gene_id,
+                            "product_2": isoformID2,
+                            "gene_2_len": len(isoformAA2)
+                        })
+
+                        # Construct FAA entry
+                        protString = construct_faa_string(fusedID, fusedDescription, fusedSequence)
+                        tempFAAstring += protString
+
+            # Add all neighbors to queue for continued traversal
+            queue.extend(currentNode.neighbors)
+
+    temp_fasta_path = f"{output_prefix}/temp_fasta.faa"
+    with open(temp_fasta_path, "w") as temp_fasta:
+        temp_fasta.write(tempFAAstring)
+
+    metadata_df = pd.DataFrame(fused_metadata)
+    return temp_fasta_path, metadata_df
 
 def gene_processor(chrom_seq, cs_gff, strand):
     """Function that uses the CDS coordinates within the gff to retrieve all gene coding sequences on a specific strand of a chromosome. Returns
@@ -296,21 +349,18 @@ def sequence_translator(refined_df):
 
     return translated_df
 
-def unfused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db, num_threads, ident_cutoff, output_prefix):
-    """Funciton used to get the original alignment scores to use as a comparison with the fused gene alignments."""
-    
-    temp_fasta_path = f"{output_prefix}/temp_fasta.faa"
-    
-    with open(temp_fasta_path, "w") as temp_fasta:
-        for prot in prot_output_df.itertuples(index=False):
-            temp_fasta.write(f">{prot.gene} {prot.product_name}\n{prot.sequence}\n")
-            #TODO: FILTER OUT BAD GENES (NO AA SEQUENCE OR VERY SMALL)
-            
+def unfused_diamond_alignment(chrom, strand_name, diamond_path, diamond_db, temp_fasta_path, num_threads, output_prefix, diamond_sensitivity=None):
+    """Function used to get the original alignment scores to use as a comparison with the fused gene alignments."""
+
     diamond_output = f"{output_prefix}/{chrom}_{strand_name}_control_diamond_results.tsv"
-    diamond_command = [diamond_path, "blastp", "--db", db, "--query", temp_fasta_path, "--out", diamond_output, 
+    diamond_command = [diamond_path, "blastp", "--db", diamond_db, "--query", temp_fasta_path, "--out", diamond_output,
                        "--outfmt", "6", "qseqid", "qlen", "sseqid", "slen", "qstart", "qend", "sstart", "send",
                        "pident", "nident", "mismatch", "evalue", "bitscore", "length", "qcovhsp", "scovhsp", "qtitle", "stitle",
                        "--header", "--evalue", "1e-5", "--threads", num_threads]
+
+    # Add sensitivity parameter if specified
+    if diamond_sensitivity:
+        diamond_command.append(diamond_sensitivity)
 
     try:
         result = subprocess.run(diamond_command, check=True, text=True, capture_output=True)
@@ -335,39 +385,20 @@ def unfused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, d
     unique_diamond_df = unique_diamond_df.loc[unique_diamond_df.groupby('gene')['percentage_of_identical_matches'].idxmax()]
     unique_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_control_unique_diamond_results.tsv", sep="\t", header=True, index=True)
     
-def fused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db, num_threads, ident_cutoff, output_prefix):
+def fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_fasta_path, fused_metadata_df, num_threads, ident_cutoff, output_prefix, diamond_sensitivity=None):
     """Function used to fuse neigboring genes and run the DIAMOND protein alignment script on the fused genes. Returns a dataframe containing unique genes that
     fit the user-inputted filtering criteria."""
-    # TODO: FILTER OUT BAD GENES (NO AA SEQUENCE OR VERY SMALL)
-    temp_fasta_path = f"{output_prefix}/temp_fasta.faa" # The input for DIAMOND is a fasta file. Therefore, need to convert the protein dataframe into a fasta format.
-    fused_prot_df_list = [] # This list will be used to store information about the fused proteins.
-    
-    with open(temp_fasta_path, "w") as temp_fasta:
-        first = True
-        for prot in prot_output_df.itertuples(index=False): # Going into each row (protein) of the protein dataframe.
-            if first == True: # The program works by fusing proteins upstream. So the current protein in the loop will be fused with the protein upstream of it. Since there is nothing upstream of the first protein on the chromosome, it is skipped.
-                previous_prot = prot # Keeping track of the previous protein.
-                first = False
-                continue
-            else:
-                current_prot = prot # Keeping track of the current protein.
-                fused_prot_gene = f"{previous_prot.gene}+{current_prot.gene}" # Fusing gene names.
-                fused_prot_product = f"{previous_prot.product_name}+{current_prot.product_name}" # Fusing product names.
-                fused_prot_seq = previous_prot.sequence + current_prot.sequence # Fusing the protein sequences.
-                fused_prot_df_list.append({"fused_gene": fused_prot_gene, "fused_product": fused_prot_product, "fused_gene_len": len(fused_prot_seq),
-                                        "gene_1": previous_prot.gene, "product_1": previous_prot.product_name, "gene_1_len": len(previous_prot.sequence),
-                                        "gene_2": current_prot.gene, "product_2": current_prot.product_name, "gene_2_len": len(current_prot.sequence)}) # Adding a dictionary of the information to the list.
-                temp_fasta.write(f">{fused_prot_gene} {fused_prot_product}\n{fused_prot_seq}\n") # Writing to the fasta.
-                previous_prot = prot # Keeping track of the previous protein as we move to the next protein in the dataframe.
-                
-    fused_prot_df = pd.DataFrame(fused_prot_df_list)
-    
-    # Creating the diamond output file path and the diamond command that will be ran in the subprocess function. 
+
+    # Creating the diamond output file path and the diamond command that will be ran in the subprocess function.
     diamond_output = f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv"
-    diamond_command = [diamond_path, "blastp", "--db", db, "--query", temp_fasta_path, "--out", diamond_output, 
+    diamond_command = [diamond_path, "blastp", "--db", db, "--query", temp_fasta_path, "--out", diamond_output,
                        "--outfmt", "6", "qseqid", "qlen", "sseqid", "slen", "qstart", "qend", "sstart", "send",
                        "pident", "nident", "mismatch", "evalue", "bitscore", "length", "qcovhsp", "scovhsp", "qtitle", "stitle",
                        "--header", "--evalue", "1e-5", "--threads", num_threads]
+
+    # Add sensitivity parameter if specified
+    if diamond_sensitivity:
+        diamond_command.append(diamond_sensitivity)
 
     # Running the diamond command via subprocess.
     try:
@@ -390,9 +421,9 @@ def fused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, dia
     diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv", sep="\t")
     # Keep only the row with the maximum coverage sum for each fused gene
     diamond_df = diamond_df.loc[diamond_df.groupby('fused_gene')['coverage_sum'].idxmax()].drop(columns="coverage_sum")
-    
+
     # Merging the diamond results dataframe with the fused protein dataframe. Had to use a weird gimmicky solution I found to keep the original order preserved.
-    fused_diamond_df = fused_prot_df.merge(fused_prot_df.merge(diamond_df, how='outer', on='fused_gene', sort=False))
+    fused_diamond_df = fused_metadata_df.merge(fused_metadata_df.merge(diamond_df, how='outer', on='fused_gene', sort=False))
     # Splitting up the subject_title column if not doing a one organism alignment
     # diamond_df[["subject_XP", "subject_product", "subject_organism"]] = diamond_df["subject_title"].str.extract(r"((?:XP|NP)_[\d\.]+)\s(.+)\s\[(.+)\]")
     # diamond_df = diamond_df.drop(columns=["subject_title"])
@@ -434,8 +465,12 @@ def fused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, dia
             if (qcov > max(gene1_qcov, gene2_qcov)) or (scov > max(gene1_scov, gene2_scov)):
                 filtered_rows.append(row._asdict())
 
-    # Convert filtered rows back to a DataFrame
-    filtered_df = pd.DataFrame(filtered_rows)
+    # Convert filtered rows back to a DataFrame, preserving structure even if empty
+    if filtered_rows:
+        filtered_df = pd.DataFrame(filtered_rows)
+    else:
+        # Create empty dataframe with same columns as filtered_fused_diamond_df
+        filtered_df = filtered_fused_diamond_df.iloc[0:0].copy()
     
     # Merge with overlap stuff
     # filtered_df = filtered_fused_diamond_df.merge(filtered_df, how="inner", on="fused_gene")
@@ -537,12 +572,10 @@ def process_faa(faaFile):
 def add_edge(upstreamNode: GenomeMap.GeneNode, downstreamNode: GenomeMap.GeneNode):
     upstreamNode.neighbors.append(downstreamNode)
 
-
 def find_last_nonoverlapping_gene(nodeList, nuNode):
     for node in reversed(nodeList):
         if node.end_coord < nuNode.start_coord:
             return node
-
 
 def process_nextgene(theMap:GenomeMap.GenomeMap, nodeList: list, open_gene_dict: dict, firstNode: bool, fields: list):
     global nuNode
@@ -590,9 +623,6 @@ def process_nextgene(theMap:GenomeMap.GenomeMap, nodeList: list, open_gene_dict:
         exit()
 
     return nuNode
-
-
-
 
 def build_genomemap(organismName, proteomeFile, gffFile, minGenePerX):
     """
@@ -647,10 +677,6 @@ def build_genomemap(organismName, proteomeFile, gffFile, minGenePerX):
 
     return theMap
 
-
-
-
-
 # Wrapping the main script code in main lets us use the other functions in other scripts without calling the whole thing.
 if __name__ == "__main__":
     # Argument method validators
@@ -701,8 +727,20 @@ if __name__ == "__main__":
         if ivalue < 1:
             raise argparse.ArgumentTypeError(f"Gene count filter must be at least 1, got {value}")
         return ivalue
+
+    def valid_sensitivity(value):
+        """Validates diamond sensitivity parameter"""
+        valid_modes = ["--fast", "--mid-sensitive", "--sensitive", "--more-sensitive", "--very-sensitive", "--ultra-sensitive"]
+        if value not in valid_modes:
+            raise argparse.ArgumentTypeError(
+                f"Invalid sensitivity mode '{value}'. Must be one of: {', '.join(valid_modes)}"
+            )
+        return value
+
     # Argparse setup
     parser = argparse.ArgumentParser(prog="Genome Misannotation Checker")
+
+    # REQUIRED PARAMS
 
     parser.add_argument('-p', "--proteome",
                         help="The filename of the .faa file containing the proteome of the organism of interest. Required input.",
@@ -710,14 +748,19 @@ if __name__ == "__main__":
                         type=valid_faa_file)
 
     parser.add_argument('-a', '--organism_annotation',
-                        help="Input the organism's annotation features in a gff format. This should be a RefSeq annotation. This input is required.",
+                        help="Input the organism's annotation features in a gff format. This should be a RefSeq annotation. Required input",
                         required=True,
                         type=valid_gff_file)
 
     parser.add_argument('-db', '--database',
-                        help="Input the local reference protein database in a dmnd format. This input is required.",
+                        help="Input the local reference protein database in a dmnd format. Required input.",
                         required=True,
                         type=valid_dmnd_file)
+    parser.add_argument('-o', '--output',
+                        help="The output folder path. Required input.",
+                        required=True)
+
+    # OPTIONAL PARAMS
 
     parser.add_argument('-t', '--num_threads',
                         help="Input the number of threads that you would like to use. By default, half of your available threads will be used.",
@@ -734,46 +777,48 @@ if __name__ == "__main__":
                         type=min_gene_count,
                         default=5)
 
+    parser.add_argument('-ds', '--diamond_sensitivity',
+                        help="Sensitivity mode parameter for the Diamond alignment tool. Valid options: --fast, --mid-sensitive, --sensitive, --more-sensitive, --very-sensitive, --ultra-sensitive",
+                        type=valid_sensitivity,
+                        default=None)
+
     args = parser.parse_args()
 
-    # Establishing variables from args.
-    cwd = os.getcwd()
-    # name = args.organism_name.strip().lower()
-    genome = args.organism_genome
+
+
     annotation = args.organism_annotation
+    organism_name = detect_organism_name(annotation)
+
+    # TODO: Implement -n parameter
+    if organism_name is None:
+        print("ERROR: Organism name not detected. Please enter it manually using the '-n' or '--name' parameter.")
+        exit()
+
     diamond_path = shutil.which("diamond")
     if diamond_path is None:
-        print("diamond not found in PATH, please check your installation")
+        print("diamond not found in PATH, please check your installation.")
         exit()
+
     db = args.database
     proteome_file = args.proteome
     num_threads = str(args.num_threads)
     ident_cutoff = float(args.identity_cutoff) * 100
     min_geneperx_threshold = args.xfilter
+    gff_file = args.organism_annotation
+    output_folder = args.output
+    diamond_sensitivity = args.diamond_sensitivity
+
+    # Create output folder if it doesn't exist
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+        print(f"Created output folder: {output_folder}")
 
     # Storing the command-line arguments inputted by the user in a log file for future reference by the user.
-    if not os.path.exists("output"):
-        os.makedirs("output")
-    with open("output/args.log", 'w') as log_file:
+    with open(f"{output_folder}/args.log", 'w') as log_file:
         log_file.write("Command-line input:\n")
         log_file.write(" ".join(sys.argv) + "\n")
 
-    # Loading in the organism's genome and annotation.
-    os.chdir(cwd) #TODO: Get curdir from script file location
-    start_time = time.time()
-    idx_genome, gff = genome_loader(genome, annotation)
-    end_time = time.time()
-    print(f"It took {end_time - start_time:0.2f} seconds to load the provided genome.")
-
-    # Determining the chromosome format within the genome, returning a list of them which has been curated by the user, and then filtering the gff df based on it.
-    # LEGACY CODE: Manually selecting which chromosomes you want
-    filtered_chrom_list = chromosome_parser(gff)
-    selected_chrom_list = chromosome_selector(filtered_chrom_list)
-
-    # UPDATED VERSION: Select chromosomes and scaffolds by gene count
-
-    # Manipulating the df for iteration
-    filtered_gff = gff_manipulator(gff, selected_chrom_list)
+    genomeMap = build_genomemap(organism_name, proteome_file, gff_file, min_geneperx_threshold)
 
     # A list to store each chromosome strand's top gene alignments.
     fused_hits_genome_df_list = []
@@ -782,11 +827,11 @@ if __name__ == "__main__":
     fused_overlap_df_list = []
 
     # Initializing a progress bar for tracking the program's status.
-    total_steps = len(selected_chrom_list) * 6 # For each chromosome, there are two strands. For each strand, there are two steps (processing and protein alignment).
+    total_steps = len(genomeMap.chromosomes.keys()) * 6 # For each chromosome, there are two strands. For each strand, there are two steps (processing and protein alignment).
     with tqdm(total=total_steps, unit="step") as pbar:
 
         # Going into each strand of each chromosome, getting each protein's sequence, fusing neighboring genes, then using DIAMOND to check for misannotations.
-        for chrom in selected_chrom_list:
+        for chrom in genomeMap.chromosomes.keys():
             for strand in ["+", "-"]:
                 # Avoiding use of + in file names since it is a no no in the rubric :)
                 if strand == "+":
@@ -794,22 +839,29 @@ if __name__ == "__main__":
                 elif strand == "-":
                     strand_name = "neg"
 
-                output_prefix = f"output/{chrom}/{strand_name}"  # Setting up the output file path.
+                output_prefix = f"{output_folder}/{chrom}/{strand_name}"  # Setting up the output file path.
                 if not os.path.exists(output_prefix):
                     os.makedirs(output_prefix)
 
                 pbar.set_description(f"Processing {chrom} {strand_name} strand")
-                prot_output_df = chromosome_processor(chrom, strand, strand_name, idx_genome, filtered_gff, output_prefix)
+                headNode = genomeMap.get_head_node(chrom, strand)
+
+
+                # Process unfused proteins first
+                temp_faa_filepath = chromosome_processor_unfused_allisoforms(chrom, strand, headNode, output_prefix)
                 pbar.update(1)
                 #The control is to see if the alignment score increases in the fused gene vs the unfused genes
                 pbar.set_description(f"Running control DIAMOND on {chrom} {strand_name} strand's unfused genes")
-                unique_unfused_chrom_strand_df = unfused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db,
-                                                                                          num_threads, ident_cutoff, output_prefix)
+                unique_unfused_chrom_strand_df = unfused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_faa_filepath,
+                                                                                          num_threads, output_prefix, diamond_sensitivity)
                 pbar.update(1)
 
+                # Process fused proteins second
+                temp_faa_filepath, fused_metadata_df = chromosome_processor_fused_allisoforms(chrom, strand, headNode, output_prefix)
+
                 pbar.set_description(f"Running DIAMOND on {chrom} {strand_name} strand's fused genes")
-                unique_fused_chrom_strand_df = fused_diamond_alignment(prot_output_df, chrom, strand, strand_name, cwd, diamond_path, db,
-                                                                                          num_threads, ident_cutoff, output_prefix)
+                unique_fused_chrom_strand_df = fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_faa_filepath,
+                                                                        fused_metadata_df, num_threads, ident_cutoff, output_prefix, diamond_sensitivity)
                 pbar.update(1)
 
                 fused_hits_genome_df_list.append(unique_fused_chrom_strand_df)
@@ -820,12 +872,12 @@ if __name__ == "__main__":
     # unique_genome_df = unique_genome_df.sort_values(by="overlap_score", ascending=False)
     unique_genome_df = unique_genome_df[(unique_genome_df["query_coverage"] > 70) &
                                         (unique_genome_df["subject_coverage"] > 50)]
-    unique_genome_df.to_csv("output/full_statistics_genome_results.csv")
+    unique_genome_df.to_csv(f"{output_folder}/full_statistics_genome_results.csv")
 
     # Making it look pretty
     # final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_XP", "subject_product", "subject_organism", "fused_gene_len", "gene_1_len", "gene_2_len", "subject_length", "alignment_length", "coverage_gene_1", "coverage_gene_2", "overlap_score", "percentage_of_identical_matches"]]
     # final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_title", "fused_gene_len", "gene_1_len", "gene_2_len", "subject_length", "alignment_length", "coverage_gene_1", "coverage_gene_2", "overlap_score", "percentage_of_identical_matches"]]
     # final_output_df = final_output_df.sort_values(by="overlap_score", ascending=False)
     #final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_title", ""]]
-    #final_output_df.to_csv("output/final_genome_results.csv")
+    #final_output_df.to_csv(f"{output_folder}/final_genome_results.csv")
     print("Your results are ready.")
