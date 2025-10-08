@@ -1,26 +1,30 @@
 import argparse
-from email.policy import default
 import bisect
 
 from Bio import SeqIO
 from Bio.Seq import Seq
-import matplotlib.pyplot as plt
-import numpy as np
 import os
 import pyranges as pr
 import pandas as pd
 import shutil
 import subprocess
 import sys
-import time
-import tkinter as tk
-from tkinter import ttk
 from tqdm import tqdm
 import regex as re
 import GenomeMap
 
 # FLAGS AND GLOBAL VARIABLES
 ORGANISM_NAME_DETECTED = False
+
+"""
+Gene types to include in the genome map analysis
+Available gene_biotype values: protein_coding, lncRNA, miRNA, tRNA, rRNA, snRNA, snoRNA, misc_RNA, guide_RNA
+Algorithm currently only works with genes that produce actual proteins and are included in the .faa, so we restrict
+the possible genes as such. In the future, if we want to concatenate a theorized protein coding gene from a gene currently
+annotated as a lncRNA, we would need ot add those included gene types in this set, and also recycle dylan's old methods
+for constructing proteins from CDS regions to manually construct the theoretical protein.
+"""
+INCLUDED_GENE_TYPES = {'protein_coding'}
 
 # Defining all functions for the program
 def get_default_num_threads():
@@ -31,52 +35,6 @@ def get_default_num_threads():
         total_threads = 4 # Included in case - for some reason - Python is not able to identify their thread count.
         
     return max(1, total_threads // 2) # Returning the max of either 1 thread or half of the total_threads. The 1 is a fall-back in the rare instance of a system having 0 or only 1 thread.
-    
-def genome_loader(genome, annotation):
-    """Function used to load in the provided genome and gff of the organism. Returns an indexed version of the genome and the gff as a dataframe."""
-    
-    print("Loading in genome and annotation...")
-    
-    idx_genome = SeqIO.index(genome, "fasta") # This is allowing for the indexing of the genome by chromosome without the loading of the entire genome.
-    gff = pr.read_gff3(annotation, as_df=True) # Reorganizing the gff into a dataframe for easy manipulation.
-    
-    return idx_genome, gff
-
-def gff_manipulator(gff, chrom_list):
-    """Function containing all manipulations (filterings, sortings, etc.) of the annotation dataframe. Returns a filtered annotation dataframe."""
-    
-    filtered_gff = gff[gff["Chromosome"].isin(chrom_list)] # Creating a df that only contains annotations belonging to genes within the selected chromosomes.
-    filtered_sorted_gff = filtered_gff.sort_values(by=["Start"]) # Making sure that the genes are sorted by position.
-    filtered_sorted_gff = filtered_sorted_gff[filtered_sorted_gff["Feature"] == "CDS"] # Since we are doing protein alignment, only need the coding strands of each gene.
-    
-    return filtered_sorted_gff
-
-def chromosome_processor(chrom, strand, headNode, output_prefix):
-    """Function that compiles multiple functions to return a dataframe containing all translated proteins for each gene on each chromosome for each strand."""
-
-    chrom_seq = genome[chrom].format("fasta") # Going into the indexed genome and retrieving the value (chromosome sequence) relating to the key (chromosome name).
-    
-    # Manipulating the chromosome sequence by discarding the sequence title line, replacing new line characters, and making the character case uniform.
-    chrom_seq = chrom_seq.split("\n", 1)
-    chrom_seq = chrom_seq[1].replace("\n", "")
-    chrom_seq = chrom_seq.upper()
-    
-    # Manipulating gff dataframe to only have entries related to the current chromosome and strand.
-    c_gff = gff[gff["Chromosome"] == chrom]
-    if strand == "+":
-        cs_gff = c_gff[c_gff["Strand"] == "+"]
-    elif strand == "-":
-        cs_gff = c_gff[c_gff["Strand"] == "-"]
-    
-    processed_gene = gene_processor(chrom_seq, cs_gff, strand) # Using CDS coordinates to build gene sequences while maintaining positional order.
-    processed_gene_df = pd.DataFrame(processed_gene) # Turning the processed_gene list into a dataframe.
-    total_prot_df = gene_joiner(processed_gene_df) # Combining DNA sequences that may have been fragmented.
-    refined_prot_df = isoform_picker(total_prot_df) # Keeping the longest isoforms and discarding the rest.
-    translated_df = sequence_translator(refined_prot_df) # Translating the kept sequences.
-      
-    translated_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_gene2protein.csv", index=False)
-    
-    return translated_df
 
 def construct_faa_string(proteinID, proteinDescription, proteinSequence):
     # Handle empty/None description
@@ -186,147 +144,6 @@ def chromosome_processor_fused_allisoforms(chrom, strand, headNode: GenomeMap.Ge
     metadata_df = pd.DataFrame(fused_metadata)
     return temp_fasta_path, metadata_df
 
-def gene_processor(chrom_seq, cs_gff, strand):
-    """Function that uses the CDS coordinates within the gff to retrieve all gene coding sequences on a specific strand of a chromosome. Returns
-    a list of dictionaries containing information about each gene and their full CDS sequence based on the coordinates."""
-    
-    # Establishing variables.
-    results = [] # Using a list to store dictionaries that contain each gene's protein information for faster processing.
-    CDS_coords = [] # Using a list to store each coordinate pair for a gene's coding strand exons.
-    previous_product = None
-    previous_gene = None
-    isoform_info = {} # Using a dictionary to store the names and CDS coordinates of all isoforms of a gene if they exist.
-    
-    # Going through each gene entry and processing them.
-    for entry in cs_gff.itertuples(index=False): # Using itertuples as a memory-efficient and fast way to access each row of the dataframe.   
-            
-        # Evaluating if the current gene entry is a continuation of the previous gene's coding strand exons.
-        if entry.gene == previous_gene:
-            exon_coords = [entry.Start, entry.End] # If it is, record the exon's genomic coordinates.
-            if "isoform" in str(entry.product).lower(): # Check for isoforms. If they exist, record their information.
-                isoform_name = entry.product
-                if isoform_name in isoform_info: # If this is the first instance of this isoform, add it to the isoform storage dictionary.
-                    isoform_info[isoform_name].append(exon_coords)
-                else: # If this is another exon of the isoform, just add the exon coordinates to the previous entry.
-                    isoform_info[isoform_name] = [exon_coords]
-            else: # If there is no isoform found, just add the genomic coordinates to the CDS dictionary.
-                CDS_coords.append(exon_coords)
-        
-        # If the current gene entry is not a continuation of the previous gene entry, write out the gene's entire CDS sequence. The not statement is to exclude the first gene entry.
-        elif previous_gene is not None and entry.gene != previous_gene:
-            if isoform_info: # If the isoform dictionary exists, then write out the contents of it.
-                for isoform, i_coords in isoform_info.items():
-                    gene_seq = ""
-                    beginning = i_coords[0][0] # Setting a variable for the beginning of the isoform, dictated by the first coordinate of the first coordinate pair.
-                    ending = i_coords[-1][-1] # Setting a variable for the ending of the isoform, dictated by the last coordinate of the last coordinate pair.
-                    # Extracting the genomic sequence of the isoform using the stored coordinates.
-                    for coords in i_coords:
-                        start, end = coords
-                        gene_seq += chrom_seq[start:end]
-                    gene_seq = Seq(gene_seq) # Making the extracted gene sequence a Seq object for easy manipulation (reverse complement).
-                    # If the negative strand is being evaluated, take the reverse complement.
-                    if strand == "-":
-                        gene_seq = gene_seq.reverse_complement()
-                    results.append({'gene': previous_gene,'product_name': isoform, "start": beginning, "end": ending, 'sequence': str(gene_seq)}) # Append the extracted isoform information to the results list.
-            if CDS_coords: # If the CDS dictionary exists (which it should whenever there are no isoforms), then write out the contents of it. Logic is the same as for the isoform extraction.
-                gene_seq = ""
-                beginning = CDS_coords[0][0] 
-                ending = CDS_coords[-1][-1] 
-                for coords in CDS_coords:
-                    start, end = coords
-                    gene_seq += chrom_seq[start:end]
-                gene_seq = Seq(gene_seq)
-                if strand == "-":
-                    gene_seq = gene_seq.reverse_complement()
-                results.append({'gene': previous_gene,'product_name': previous_product, "start": beginning, "end": ending, 'sequence': str(gene_seq)})
-        
-            # Resetting variables since the current entry is a new gene.
-            CDS_coords = []
-            isoform_info = {}
-        
-            # Recording information of the current gene entry since it is the start of a new gene.
-            exon_coords = [entry.Start, entry.End]
-            if "isoform" in str(entry.product).lower():
-                isoform_name = entry.product
-                if isoform_name in isoform_info:
-                    isoform_info[isoform_name].append(exon_coords)
-                else:
-                    isoform_info[isoform_name] = [exon_coords]
-            else:
-                CDS_coords.append(exon_coords)
-            
-        # Establishing variables for loops.
-        previous_gene = entry.gene
-        previous_product = entry.product
-
-    # Loop will break when it goes past the last entry, need to account for the last gene and add it's information to the results.
-    if isoform_info:
-        for isoform, i_coords in isoform_info.items():
-            gene_seq = ""
-            beginning = i_coords[0][0]
-            ending = i_coords[-1][-1]
-            for coords in i_coords:
-                start, end = coords
-                gene_seq += chrom_seq[start:end]
-            gene_seq = Seq(gene_seq)
-            if strand == "-":
-                gene_seq = gene_seq.reverse_complement()
-            results.append({'gene': previous_gene,'product_name': isoform, "start": beginning, "end": ending, 'sequence': str(gene_seq)})
-    if CDS_coords: 
-        gene_seq = ""
-        beginning = CDS_coords[0][0] 
-        ending = CDS_coords[-1][-1] 
-        for coords in CDS_coords:
-            start, end = coords
-            gene_seq += chrom_seq[start:end]
-        gene_seq = Seq(gene_seq)
-        if strand == "-":
-            gene_seq = gene_seq.reverse_complement()
-        results.append({'gene': previous_gene,'product_name': previous_product, "start": beginning, "end": ending, 'sequence': str(gene_seq)})
-        
-    return results
-
-def gene_joiner(processed_df):
-    """Function that combines gene sequences that may have been fragmented due to overlapping gene regions leading to breaks in gene entries. Returns
-    a dataframe containing full-length gene sequences."""
-    
-    grouped_dict = processed_df.groupby("gene") # This creates a dictionary where the keys are genes and the values are their indices within the dataframe.
-    joined_results = [] # Using a list to store the results to build the dataframe after.
-    
-    for gene, indices in grouped_dict:
-        indices = indices.sort_values(by='start') # Sorting gene entries by start to maintain sequence order.
-        
-        # Checking to see if the gene has isoforms or not.
-        base_genes = indices[~indices['product_name'].astype(str).str.contains('isoform X', case=False, na=False)]
-        isoforms = indices[indices['product_name'].astype(str).str.contains('isoform X', case=False, na=False)]
-        
-        # For genes with no isoforms, see if there are multiple entries for the same gene name. If there are, combine their sequences.
-        combined_base_genes = {}
-        for row in base_genes.itertuples(index=False):
-            gene_name = row.gene
-            if gene_name in combined_base_genes:
-                combined_base_genes[gene_name]['sequence'] += row.sequence
-                combined_base_genes[gene_name]['end'] = max(combined_base_genes[gene_name]['end'], row.end)
-            else:
-                combined_base_genes[gene_name] = {'gene': gene_name, 'product_name': row.product_name, 'start': row.start, 'end': row.end, 'sequence': row.sequence}
-        joined_results.extend(combined_base_genes.values())
-        
-        # For genes with isoforms, see if there are multiple entries for the same product name. If there are, combine their sequences.
-        combined_isoforms = {}
-        for row in isoforms.itertuples(index=False):
-            product_name = row.product_name
-            if product_name in combined_isoforms:
-                combined_isoforms[product_name]['sequence'] += row.sequence
-                combined_isoforms[product_name]['end'] = max(combined_isoforms[product_name]['end'], row.end)
-            else:
-                combined_isoforms[product_name] = {'gene': row.gene, 'product_name': product_name, 'start': row.start, 'end': row.end, 'sequence': row.sequence}
-        joined_results.extend(combined_isoforms.values())
-        
-    joined_results = pd.DataFrame(joined_results)
-    joined_results = joined_results.sort_values(by=['start', 'end'])
-    
-    return joined_results
-        
 def isoform_picker(joined_df):
     """Function that goes through the inputted dataframe and analyzes the length of each gene, keeping only the longest gene of multiple 
     entries of the same gene. This is a means to keep only the longest isoform of a gene with multiple isoforms. Returns a dataframe with 
@@ -338,16 +155,6 @@ def isoform_picker(joined_df):
     joined_df = joined_df.sort_values(by=['start', 'end'])
     
     return joined_df
-
-def sequence_translator(refined_df):
-    """Function that translates the kept gene CDS sequences. To take into account rare, incomplete gene sequences due to the annotation process,
-    padding is added when applicable to keep triplets. Returns a dataframe containing the translated sequences."""
-    
-    refined_df['protein_sequence'] = refined_df['sequence'].apply(lambda seq: str(Seq(seq + "N" * ((3 - len(seq) % 3) % 3)).translate(to_stop=True)))
-    translated_df = refined_df.drop(columns=['sequence'])
-    translated_df = translated_df.rename(columns={'protein_sequence': 'sequence'})
-
-    return translated_df
 
 def unfused_diamond_alignment(chrom, strand_name, diamond_path, diamond_db, temp_fasta_path, num_threads, output_prefix, diamond_sensitivity=None):
     """Function used to get the original alignment scores to use as a comparison with the fused gene alignments."""
@@ -660,20 +467,36 @@ def build_genomemap(organismName, proteomeFile, gffFile, minGenePerX):
                 continue
 
             if feature_type == 'gene':
-                strand = fields[6]
-                curNode = process_nextgene(theMap, nodeList[strand], open_genes, first_node_per_strand[strand], fields)
-                bisect.insort(nodeList[strand], curNode, key=lambda x: x.end_coord)
-                first_node_per_strand[strand] = False  # Mark that we've seen the first node for this strand
-            if feature_type == 'CDS':
+                # Extract gene_biotype and check if it's in the included types
                 attributes = fields[8]
                 attr_dict = {}
                 for attr in attributes.strip().split(';'):
                     if '=' in attr:
                         key, value = attr.split('=', 1)
                         attr_dict[key] = value
-                protein_id = attr_dict.get('Name')
-                if protein_id and protein_id in proteins:
-                    curNode.add_protein_isoform(protein_id, proteins[protein_id])
+                gene_biotype = attr_dict.get('gene_biotype', '')
+
+                if gene_biotype in INCLUDED_GENE_TYPES:
+                    strand = fields[6]
+                    curNode = process_nextgene(theMap, nodeList[strand], open_genes, first_node_per_strand[strand], fields)
+                    bisect.insort(nodeList[strand], curNode, key=lambda x: x.end_coord)
+                    first_node_per_strand[strand] = False  # Mark that we've seen the first node for this strand
+                else:
+                    # Skip genes not in INCLUDED_GENE_TYPES (tRNA, lncRNA, miRNA, etc.)
+                    curNode = None
+
+            if feature_type == 'CDS':
+                # Only add CDS if curNode points to a valid gene (one that passed the gene_biotype filter)
+                if curNode is not None:
+                    attributes = fields[8]
+                    attr_dict = {}
+                    for attr in attributes.strip().split(';'):
+                        if '=' in attr:
+                            key, value = attr.split('=', 1)
+                            attr_dict[key] = value
+                    protein_id = attr_dict.get('Name')
+                    if protein_id and protein_id in proteins:
+                        curNode.add_protein_isoform(protein_id, proteins[protein_id])
 
     return theMap
 
@@ -859,20 +682,32 @@ if __name__ == "__main__":
                 # Process fused proteins second
                 temp_faa_filepath, fused_metadata_df = chromosome_processor_fused_allisoforms(chrom, strand, headNode, output_prefix)
 
-                pbar.set_description(f"Running DIAMOND on {chrom} {strand_name} strand's fused genes")
-                unique_fused_chrom_strand_df = fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_faa_filepath,
-                                                                        fused_metadata_df, num_threads, ident_cutoff, output_prefix, diamond_sensitivity)
+                # Check if there are any fusions to process
+                if os.path.getsize(temp_faa_filepath) > 0 and not fused_metadata_df.empty:
+                    pbar.set_description(f"Running DIAMOND on {chrom} {strand_name} strand's fused genes")
+                    unique_fused_chrom_strand_df = fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_faa_filepath,
+                                                                            fused_metadata_df, num_threads, ident_cutoff, output_prefix, diamond_sensitivity)
+                    fused_hits_genome_df_list.append(unique_fused_chrom_strand_df)
+                else:
+                    pbar.set_description(f"Skipping {chrom} {strand_name} strand (no fusions to process)")
+                    # Clean up empty temp file
+                    if os.path.exists(temp_faa_filepath):
+                        os.remove(temp_faa_filepath)
                 pbar.update(1)
 
-                fused_hits_genome_df_list.append(unique_fused_chrom_strand_df)
-
     # Compiling all unique gene alignments to have one dataframe that contains genome-wide results.
-    unique_genome_df = pd.concat(fused_hits_genome_df_list, ignore_index=True)
-    # unique_genome_df = unique_genome_df[unique_genome_df["subject_organism"].str.lower() != name] # Filtering out hits to own organism this line problematic for some reason
-    # unique_genome_df = unique_genome_df.sort_values(by="overlap_score", ascending=False)
-    unique_genome_df = unique_genome_df[(unique_genome_df["query_coverage"] > 70) &
-                                        (unique_genome_df["subject_coverage"] > 50)]
-    unique_genome_df.to_csv(f"{output_folder}/full_statistics_genome_results.csv")
+    if fused_hits_genome_df_list:
+        unique_genome_df = pd.concat(fused_hits_genome_df_list, ignore_index=True)
+        # unique_genome_df = unique_genome_df[unique_genome_df["subject_organism"].str.lower() != name] # Filtering out hits to own organism this line problematic for some reason
+        # unique_genome_df = unique_genome_df.sort_values(by="overlap_score", ascending=False)
+        unique_genome_df = unique_genome_df[(unique_genome_df["query_coverage"] > 70) &
+                                            (unique_genome_df["subject_coverage"] > 50)]
+        unique_genome_df.to_csv(f"{output_folder}/full_statistics_genome_results.csv")
+    else:
+        print("No fused genes found across all chromosomes/strands.")
+        # Create empty results file with proper headers
+        pd.DataFrame(columns=["fused_gene", "fused_product", "fused_gene_len", "gene_1", "product_1",
+                              "gene_1_len", "gene_2", "product_2", "gene_2_len"]).to_csv(f"{output_folder}/full_statistics_genome_results.csv")
 
     # Making it look pretty
     # final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_XP", "subject_product", "subject_organism", "fused_gene_len", "gene_1_len", "gene_2_len", "subject_length", "alignment_length", "coverage_gene_1", "coverage_gene_2", "overlap_score", "percentage_of_identical_matches"]]
