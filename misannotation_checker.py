@@ -15,7 +15,7 @@ import GenomeMap
 
 # FLAGS AND GLOBAL VARIABLES
 ORGANISM_NAME_DETECTED = False
-
+    
 """
 Gene types to include in the genome map analysis
 Available gene_biotype values: protein_coding, lncRNA, miRNA, tRNA, rRNA, snRNA, snoRNA, misc_RNA, guide_RNA
@@ -328,9 +328,19 @@ def count_genes_per_chromosome(gffFile):
                 seqid = fields[0]
                 feature_type = fields[2]
 
-                # Count only gene features
+                # Count only protein coding gene features
                 if feature_type == 'gene':
-                    gene_counts[seqid] = gene_counts.get(seqid, 0) + 1
+                    # Extract gene_biotype and check if it's in the included types
+                    attributes = fields[8]
+                    attr_dict = {}
+                    for attr in attributes.strip().split(';'):
+                        if '=' in attr:
+                            key, value = attr.split('=', 1)
+                            attr_dict[key] = value
+                    gene_biotype = attr_dict.get('gene_biotype', '')
+
+                    if gene_biotype in INCLUDED_GENE_TYPES:
+                        gene_counts[seqid] = gene_counts.get(seqid, 0) + 1
 
     return gene_counts
 
@@ -437,6 +447,7 @@ def build_genomemap(organismName, proteomeFile, gffFile, minGenePerX):
     candidates to other genes
     """
     chromosomes = genecount_filtered_chromosomes(gffFile, minGenePerX)
+    print(f"Chromsomes/contigs that met the minimum gene count threshold of {min_geneperx_threshold}:\n{chr(10).join(sorted(chromosomes))}")
     proteins = process_faa(proteomeFile)
     theMap = GenomeMap.GenomeMap(organismName)
     with open(gffFile) as gff:
@@ -668,32 +679,35 @@ if __name__ == "__main__":
 
                 pbar.set_description(f"Processing {chrom} {strand_name} strand")
                 headNode = genomeMap.get_head_node(chrom, strand)
-
-
-                # Process unfused proteins first
-                temp_faa_filepath = chromosome_processor_unfused_allisoforms(chrom, strand, headNode, output_prefix)
-                pbar.update(1)
-                #The control is to see if the alignment score increases in the fused gene vs the unfused genes
-                pbar.set_description(f"Running control DIAMOND on {chrom} {strand_name} strand's unfused genes")
-                unique_unfused_chrom_strand_df = unfused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_faa_filepath,
-                                                                                          num_threads, output_prefix, diamond_sensitivity)
-                pbar.update(1)
-
-                # Process fused proteins second
-                temp_faa_filepath, fused_metadata_df = chromosome_processor_fused_allisoforms(chrom, strand, headNode, output_prefix)
-
-                # Check if there are any fusions to process
-                if os.path.getsize(temp_faa_filepath) > 0 and not fused_metadata_df.empty:
-                    pbar.set_description(f"Running DIAMOND on {chrom} {strand_name} strand's fused genes")
-                    unique_fused_chrom_strand_df = fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_faa_filepath,
-                                                                            fused_metadata_df, num_threads, ident_cutoff, output_prefix, diamond_sensitivity)
-                    fused_hits_genome_df_list.append(unique_fused_chrom_strand_df)
+                if headNode is None:
+                    print(f"{chrom}'s {strand_name} strand does not contain any protein-coding genes.")
+                    pbar.update(2) 
                 else:
-                    pbar.set_description(f"Skipping {chrom} {strand_name} strand (no fusions to process)")
-                    # Clean up empty temp file
-                    if os.path.exists(temp_faa_filepath):
-                        os.remove(temp_faa_filepath)
-                pbar.update(1)
+                    # Process unfused proteins first
+                    temp_faa_filepath = chromosome_processor_unfused_allisoforms(chrom, strand, headNode, output_prefix)
+                    pbar.update(1)
+                    #The control is to see if the alignment score increases in the fused gene vs the unfused genes
+                    pbar.set_description(f"Running control DIAMOND on {chrom} {strand_name} strand's unfused genes")
+                    unique_unfused_chrom_strand_df = unfused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_faa_filepath,
+                                                                                              num_threads, output_prefix, diamond_sensitivity)
+                    pbar.update(1)
+
+                    # Process fused proteins second
+                    temp_faa_filepath, fused_metadata_df = chromosome_processor_fused_allisoforms(chrom, strand, headNode, output_prefix)
+
+                    # Check if there are any fusions to process
+                    if os.path.getsize(temp_faa_filepath) > 0 and not fused_metadata_df.empty:
+                        pbar.set_description(f"Running DIAMOND on {chrom} {strand_name} strand's fused genes")
+                        unique_fused_chrom_strand_df = fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_faa_filepath,
+                                                                                fused_metadata_df, num_threads, ident_cutoff, output_prefix, diamond_sensitivity)
+                        fused_hits_genome_df_list.append(unique_fused_chrom_strand_df)
+                    else:
+                        pbar.set_description(f"Skipping {chrom} {strand_name} strand (no fusions to process)")
+                        # Clean up empty temp file
+                        if os.path.exists(temp_faa_filepath):
+                            os.remove(temp_faa_filepath)
+                    pbar.update(1)
+
 
     # Compiling all unique gene alignments to have one dataframe that contains genome-wide results.
     if fused_hits_genome_df_list:
