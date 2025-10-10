@@ -189,12 +189,7 @@ def unfused_diamond_alignment(chrom, strand_name, diamond_path, diamond_db, geno
     # Filtering out matches to own organism
     diamond_df_no_org = diamond_df[~diamond_df["subject_title"].str.contains(organism_name, regex=False, na=False)]
     return diamond_df_no_org
-    # keeping entry with the highest qcov and scov
-    # diamond_df['coverage_sum'] = diamond_df['query_coverage'] + diamond_df['subject_coverage']
-    # diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_control_diamond_results.tsv", sep="\t")
-    # unique_diamond_df = diamond_df.loc[diamond_df.groupby('gene')['coverage_sum'].idxmax()].drop(columns='coverage_sum')
-    # unique_diamond_df = unique_diamond_df.loc[unique_diamond_df.groupby('gene')['percentage_of_identical_matches'].idxmax()]
-    # unique_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_control_unique_diamond_results.tsv", sep="\t", header=True, index=True)
+    
     
 def fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_fasta_path, fused_metadata_df, num_threads, ident_cutoff, output_prefix, diamond_sensitivity=None):
     """Function used to fuse neigboring genes and run the DIAMOND protein alignment script on the fused genes. Returns a dataframe containing unique genes that
@@ -228,74 +223,14 @@ def fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_fasta_pat
     
     # Converting the .tsv provided by diamond to a dataframe while skipping useless rows (the first 3) and renaming the headers.
     diamond_df = pd.read_csv(f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv", sep="\t", skiprows = 3, names = headers)
-    # diamond_df["coverage_sum"] = diamond_df["query_coverage"] + diamond_df["subject_coverage"]
-    # diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv", sep="\t")
-    # Keep only the row with the maximum coverage sum for each fused gene
-    # diamond_df = diamond_df.loc[diamond_df.groupby('fused_gene')['coverage_sum'].idxmax()].drop(columns="coverage_sum")
 
     # Merging the diamond results dataframe with the fused protein dataframe. Had to use a weird gimmicky solution I found to keep the original order preserved.
     fused_diamond_df = fused_metadata_df.merge(fused_metadata_df.merge(diamond_df, how='outer', on='fused_protein', sort=False))
-    # Splitting up the subject_title column if not doing a one organism alignment
-    # diamond_df[["subject_XP", "subject_product", "subject_organism"]] = diamond_df["subject_title"].str.extract(r"((?:XP|NP)_[\d\.]+)\s(.+)\s\[(.+)\]")
-    # diamond_df = diamond_df.drop(columns=["subject_title"])
-    # fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_max_diamond_results.tsv", sep="\t")
     
     # Only filtering for fused genes that have overlaps with at least 10 AAs, maybe make this user-inputted
     fused_hits_df = fused_diamond_df[(fused_diamond_df["start_of_alignment_in_query"] < (fused_diamond_df["gene_1_len"]-10)) &
                                      (fused_diamond_df["end_of_alignment_in_query"] > (fused_diamond_df["gene_1_len"]+10))].copy()
     
-    # Applying the identity cutoff filter inputted by the user as well as filtering to only keep hits with overlaps between the two gene parts.
-    # filtered_fused_diamond_df = fused_diamond_df[(fused_diamond_df["start_of_alignment_in_query"] < fused_diamond_df["gene_1_len"]) &
-                                                 # (fused_diamond_df["end_of_alignment_in_query"] > fused_diamond_df["gene_1_len"]) & 
-                                                 # (fused_diamond_df["percentage_of_identical_matches"] > ident_cutoff)
-                                                 # ].copy()
-    
-    # Creating overlap scores for one's that we know have an overlap for easier viewing for the user. These are the average of each gene's coverage within the alignment.
-    # filtered_fused_diamond_df.loc[:, "coverage_gene_1"] = ((filtered_fused_diamond_df["gene_1_len"] - filtered_fused_diamond_df["start_of_alignment_in_query"]) / filtered_fused_diamond_df["gene_1_len"])
-    # filtered_fused_diamond_df.loc[:, "coverage_gene_2"] = ((filtered_fused_diamond_df["end_of_alignment_in_query"] - (filtered_fused_diamond_df["gene_1_len"] + 1)) / filtered_fused_diamond_df["gene_2_len"])
-    # filtered_fused_diamond_df.loc[:, "overlap_score"] = ((filtered_fused_diamond_df["coverage_gene_1"] + filtered_fused_diamond_df["coverage_gene_2"]) / 2)                                                       
-    
-    # Load control results
-    # control_file = f"{output_prefix}/{chrom}_{strand_name}_control_unique_diamond_results.tsv"
-    # control_df = pd.read_csv(control_file, sep="\t")
-    
-    # For each fused gene, compare qcovhsp and scovhsp with the corresponding control genes
-    # filtered_rows = []
-    # for row in filtered_fused_diamond_df.itertuples():
-        # gene1 = row.gene_1
-        # gene2 = row.gene_2
-        # qcov = row.query_coverage
-        # scov = row.subject_coverage
-
-        # gene1_control = control_df[control_df["gene"] == gene1]
-        # gene2_control = control_df[control_df["gene"] == gene2]
-
-        # if not gene1_control.empty and not gene2_control.empty:
-            # gene1_qcov = gene1_control["query_coverage"].max()
-            # gene2_qcov = gene2_control["query_coverage"].max()
-            # gene1_scov = gene1_control["subject_coverage"].max()
-            # gene2_scov = gene2_control["subject_coverage"].max()
-
-            # Check if fused qcov/scov exceeds either gene1 or gene2
-            # if (qcov > max(gene1_qcov, gene2_qcov)) or (scov > max(gene1_scov, gene2_scov)):
-                # filtered_rows.append(row._asdict())
-
-    # Convert filtered rows back to a DataFrame, preserving structure even if empty
-    # if filtered_rows:
-        # filtered_df = pd.DataFrame(filtered_rows)
-    # else:
-        # Create empty dataframe with same columns as filtered_fused_diamond_df
-        # filtered_df = filtered_fused_diamond_df.iloc[0:0].copy()
-    
-    # Merge with overlap stuff
-    # filtered_df = filtered_fused_diamond_df.merge(filtered_df, how="inner", on="fused_gene")
-    
-    # filtered_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_filtered_fused_diamond.csv")
-    
-    
-    # Creating a dataframe that takes the greatest match for each alignment after filtering for easy viewing.
-    # unique_filtered_fused_diamond_df = filtered_fused_diamond_df.groupby('fused_gene').first().reset_index()
-    # unique_filtered_fused_diamond_df.to_csv(f"{output_prefix}/{chrom}_{strand_name}_unique_filtered_fused_diamond.csv")
     
     os.remove(temp_fasta_path)
     
@@ -519,6 +454,27 @@ def build_genomemap(organismName, proteomeFile, gffFile, minGenePerX):
 
     return theMap
 
+def compare_bitscores(df_fused, df_control):
+    # Create lookup dictionary for quick access to control bitscores
+    bitscore_dict = df_control.set_index("protein")["bit_score"].to_dict()
+
+    # Define comparison function for each row
+    def is_fused_higher(row):
+        b1 = bitscore_dict.get(row["product_1"], None)
+        b2 = bitscore_dict.get(row["product_2"], None)
+        if b1 is None or b2 is None:
+            return None  # skip if missing
+        return row["bit_score"] > b1 and row["bit_score"] > b2
+
+    # Apply comparison to each fused protein row
+    df_fused["fused_higher"] = df_fused.apply(is_fused_higher, axis=1)
+
+    # Split into two new DataFrames (format preserved)
+    df_fused_higher = df_fused[df_fused["fused_higher"] == True].copy()
+    df_fused_lower = df_fused[df_fused["fused_higher"] == False].copy()
+
+    return df_fused_higher, df_fused_lower
+
 # Wrapping the main script code in main lets us use the other functions in other scripts without calling the whole thing.
 if __name__ == "__main__":
     # Argument method validators
@@ -704,7 +660,7 @@ if __name__ == "__main__":
                         fused_chrom_hits_df, fused_diamond_df = fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_faa_filepath,
                                                                                 fused_metadata_df, num_threads, ident_cutoff, output_prefix, diamond_sensitivity)
                         fused_hits_genome_df_list.append(fused_chrom_hits_df)
-                        fused_diamond_df.to_csv(f"{output_prefix}/test_df.csv")
+                        # fused_diamond_df.to_csv(f"{output_prefix}/test_df.csv")
                     else:
                         pbar.set_description(f"Skipping {chrom} {strand_name} strand (no fusions to process)")
                         # Clean up empty temp file
@@ -729,26 +685,25 @@ if __name__ == "__main__":
     # Compiling all unique gene alignments to have one dataframe that contains genome-wide results.
     if fused_hits_genome_df_list:
         fused_hits = pd.concat(fused_hits_genome_df_list, ignore_index=True)
-        max_eval_fuse = fused_hits.groupby("fused_protein")["expected_value"].idxmax()
-        fused_hits_filter = fused_hits.loc[max_eval_fuse].reset_index(drop=True)
-        max_eval_control = control_hits.groupby("protein")["expected_value"].idxmax()
-        control_hits_filter = control_hits.loc[max_eval_control].reset_index(drop=True)
-        # unique_genome_df = unique_genome_df[unique_genome_df["subject_organism"].str.lower() != name] # Filtering out hits to own organism this line problematic for some reason
-        # unique_genome_df = unique_genome_df.sort_values(by="overlap_score", ascending=False)
-        # unique_genome_df = unique_genome_df[(unique_genome_df["query_coverage"] > 70) &
-                                            # (unique_genome_df["subject_coverage"] > 50)]
+        
+        # Getting only best score for each protein/fused protein
+        min_eval_fuse = fused_hits.groupby("fused_protein")["expected_value"].idxmin()
+        fused_hits_filter = fused_hits.loc[min_eval_fuse].reset_index(drop=True)
+        min_eval_control = control_hits.groupby("protein")["expected_value"].idxmin()
+        control_hits_filter = control_hits.loc[min_eval_control].reset_index(drop=True)
         fused_hits_filter.to_csv(f"{output_folder}/fused_hits.csv")
         control_hits_filter.to_csv(f"{output_folder}/control_hits.csv")
+        
+        # Comparing fused hits to control hits based on bit-score improvement
+        df_fused_higher, df_fused_lower = compare_bitscores(fused_hits_filter, control_hits_filter)
+        
+        df_fused_higher.to_csv(f"{output_folder}/higher_bitscore.csv")
+        df_fused_lower.to_csv(f"{output_folder}/lower_bitscore.csv")
+        
     else:
         print("No fused genes found across all chromosomes/strands.")
         # Create empty results file with proper headers
         pd.DataFrame(columns=["fused_gene", "fused_product", "fused_gene_len", "gene_1", "product_1",
                               "gene_1_len", "gene_2", "product_2", "gene_2_len"]).to_csv(f"{output_folder}/full_statistics_genome_results.csv")
 
-    # Making it look pretty
-    # final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_XP", "subject_product", "subject_organism", "fused_gene_len", "gene_1_len", "gene_2_len", "subject_length", "alignment_length", "coverage_gene_1", "coverage_gene_2", "overlap_score", "percentage_of_identical_matches"]]
-    # final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_title", "fused_gene_len", "gene_1_len", "gene_2_len", "subject_length", "alignment_length", "coverage_gene_1", "coverage_gene_2", "overlap_score", "percentage_of_identical_matches"]]
-    # final_output_df = final_output_df.sort_values(by="overlap_score", ascending=False)
-    #final_output_df = unique_genome_df[["fused_gene", "fused_product", "subject_title", ""]]
-    #final_output_df.to_csv(f"{output_folder}/final_genome_results.csv")
     print("Your results are ready.")
