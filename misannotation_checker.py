@@ -158,7 +158,7 @@ def isoform_picker(joined_df):
     
     return joined_df
 
-def unfused_diamond_alignment(chrom, strand_name, diamond_path, diamond_db, genome_faa_path, num_threads, output_prefix, organism_name, diamond_sensitivity=None):
+def unfused_diamond_alignment(chrom, strand_name, diamond_path, diamond_db, genome_faa_path, num_threads, output_prefix, diamond_sensitivity=None):
     """Function used to get the original alignment scores to use as a comparison with the fused gene alignments."""
 
     diamond_output = f"{output_prefix}/{chrom}_{strand_name}_control_diamond_results.tsv"
@@ -185,10 +185,7 @@ def unfused_diamond_alignment(chrom, strand_name, diamond_path, diamond_db, geno
                "query_title", "subject_title"]
     
     diamond_df = pd.read_csv(f"{output_prefix}/{chrom}_{strand_name}_control_diamond_results.tsv", sep="\t", skiprows = 3, names = headers)
-    
-    # Filtering out matches to own organism
-    diamond_df_no_org = diamond_df[~diamond_df["subject_title"].str.contains(organism_name, regex=False, na=False)]
-    return diamond_df_no_org
+    return diamond_df
     
     
 def fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_fasta_path, fused_metadata_df, num_threads, ident_cutoff, output_prefix, diamond_sensitivity=None):
@@ -528,7 +525,7 @@ if __name__ == "__main__":
 
     def valid_sensitivity(value):
         """Validates diamond sensitivity parameter"""
-        valid_modes = ["--fast", "--mid-sensitive", "--sensitive", "--more-sensitive", "--very-sensitive", "--ultra-sensitive"]
+        valid_modes = ["fast", "mid-sensitive", "sensitive", "more-sensitive", "very-sensitive", "ultra-sensitive"]
         if value not in valid_modes:
             raise argparse.ArgumentTypeError(
                 f"Invalid sensitivity mode '{value}'. Must be one of: {', '.join(valid_modes)}"
@@ -576,7 +573,7 @@ if __name__ == "__main__":
                         default=5)
 
     parser.add_argument('-ds', '--diamond_sensitivity',
-                        help="Sensitivity mode parameter for the Diamond alignment tool. Valid options: --fast, --mid-sensitive, --sensitive, --more-sensitive, --very-sensitive, --ultra-sensitive",
+                        help="Sensitivity mode parameter for the Diamond alignment tool. Valid options: fast, mid-sensitive, sensitive, more-sensitive, very-sensitive, ultra-sensitive",
                         type=valid_sensitivity,
                         default=None)
 
@@ -604,7 +601,10 @@ if __name__ == "__main__":
     min_geneperx_threshold = args.xfilter
     gff_file = args.organism_annotation
     output_folder = args.output
-    diamond_sensitivity = args.diamond_sensitivity
+    if args.diamond_sensitivity:
+        diamond_sensitivity = "--" + args.diamond_sensitivity
+    else:
+        diamond_sensitivity = args.diamond_sensitivity
 
     # Create output folder if it doesn't exist
     if not os.path.exists(output_folder):
@@ -677,7 +677,7 @@ if __name__ == "__main__":
                     
         #The control is to see if the alignment score increases in the fused gene vs the unfused genes for any overlapping hits in the fused genes
         pbar.set_description("Running control DIAMOND on identified gene parts")
-        control_hits = unfused_diamond_alignment(chrom, strand_name, diamond_path, db, genome_faa_path, num_threads, output_prefix, organism_name, diamond_sensitivity)
+        control_hits = unfused_diamond_alignment(chrom, strand_name, diamond_path, db, genome_faa_path, num_threads, output_prefix, diamond_sensitivity)
         pbar.update(1)
 
     
@@ -685,6 +685,7 @@ if __name__ == "__main__":
     # Compiling all unique gene alignments to have one dataframe that contains genome-wide results.
     if fused_hits_genome_df_list:
         fused_hits = pd.concat(fused_hits_genome_df_list, ignore_index=True)
+        fused_hits = fused_hits[~fused_hits["subject_title"].str.contains(organism_name, regex=False, na=False)]
         
         # Getting only best score for each protein/fused protein
         min_eval_fuse = fused_hits.groupby("fused_protein")["expected_value"].idxmin()
