@@ -8,6 +8,8 @@ import sys
 from tqdm import tqdm
 import regex as re
 import GenomeMap
+import scoring
+import output_formatter
 
 # FLAGS AND GLOBAL VARIABLES
 ORGANISM_NAME_DETECTED = False
@@ -472,6 +474,202 @@ def compare_bitscores(df_fused, df_control):
 
     return df_fused_higher, df_fused_lower
 
+
+def calculate_intron_lengths(df_fused, gff_file):
+    """
+    Calculate theorized intron length between fused gene pairs from GFF file.
+
+    The intron length is the genomic distance between gene_1's end and gene_2's start.
+    For genes on the negative strand, we take the absolute distance.
+
+    Args:
+        df_fused (pd.DataFrame): Fused hits dataframe with gene_1 and gene_2 columns
+        gff_file (str): Path to GFF annotation file
+
+    Returns:
+        dict: Mapping of (gene_1, gene_2) tuples to intron length
+    """
+    # Build a dictionary of gene coordinates from GFF
+    gene_coords = {}  # {gene_id: (chrom, start, end, strand)}
+
+    with open(gff_file) as gff:
+        for line in gff:
+            if line.startswith('#'):
+                continue
+
+            fields = line.split('\t')
+            if len(fields) < 9:
+                continue
+
+            feature_type = fields[2]
+            if feature_type == 'gene':
+                # Extract gene_biotype
+                attributes = fields[8]
+                attr_dict = {}
+                for attr in attributes.strip().split(';'):
+                    if '=' in attr:
+                        key, value = attr.split('=', 1)
+                        attr_dict[key] = value
+
+                gene_biotype = attr_dict.get('gene_biotype', '')
+                if gene_biotype in INCLUDED_GENE_TYPES:
+                    gene_id = attr_dict.get('gene') or attr_dict.get('Name') or attr_dict.get('locus_tag')
+                    if gene_id:
+                        chrom = fields[0]
+                        start = int(fields[3])
+                        end = int(fields[4])
+                        strand = fields[6]
+                        gene_coords[gene_id] = (chrom, start, end, strand)
+
+    # Calculate intron lengths for each gene pair
+    intron_lengths = {}
+    unique_pairs = df_fused[['gene_1', 'gene_2']].drop_duplicates()
+
+    for _, row in unique_pairs.iterrows():
+        gene_1 = row['gene_1']
+        gene_2 = row['gene_2']
+
+        if gene_1 in gene_coords and gene_2 in gene_coords:
+            chrom1, start1, end1, strand1 = gene_coords[gene_1]
+            chrom2, start2, end2, strand2 = gene_coords[gene_2]
+
+            # Only calculate if on same chromosome and strand
+            if chrom1 == chrom2 and strand1 == strand2:
+                # Intron length is the gap between genes
+                # For + strand: gap = start2 - end1 - 1
+                # For - strand: gap = start1 - end2 - 1 (but genes are stored in opposite order)
+                # Since our algorithm processes genes in genomic order, we can use:
+                gap = start2 - end1 - 1
+
+                # Gap can be negative if genes overlap (which is valid in the graph)
+                # Set overlapping genes to have 0 intron length
+                intron_length = max(0, gap)
+                intron_lengths[(gene_1, gene_2)] = intron_length
+            else:
+                # Different chromosomes or strands - shouldn't happen but handle it
+                intron_lengths[(gene_1, gene_2)] = None
+        else:
+            # Gene not found in GFF
+            intron_lengths[(gene_1, gene_2)] = None
+
+    return intron_lengths
+
+
+def calculate_scores_for_hits(df_fused, df_control, gff_file=None):
+    """
+    Calculate composite scores for all fused gene hits.
+
+    Args:
+        df_fused (pd.DataFrame): Fused hits dataframe
+        df_control (pd.DataFrame): Control hits dataframe
+        gff_file (str, optional): Path to GFF file for calculating intron lengths
+
+    Returns:
+        pd.DataFrame: Fused hits dataframe with composite_score column added
+    """
+    # Create lookup dictionary for control bitscores
+    control_bitscore_dict = df_control.set_index("protein")["bit_score"].to_dict()
+
+    # Step 1: Calculate intron lengths if GFF file provided
+    if gff_file:
+        intron_lengths_dict = calculate_intron_lengths(df_fused, gff_file)
+        # Add intron length column (in base pairs)
+        df_fused["theorized_intron_length_bp"] = df_fused.apply(
+            lambda row: intron_lengths_dict.get((row['gene_1'], row['gene_2']), None),
+            axis=1
+        )
+    else:
+        df_fused["theorized_intron_length_bp"] = None
+
+    # Step 2: Extract organism names from subject_title and count unique organisms per GENE PAIR
+    # Extract organism name from subject_title (format: "protein_id description [Organism name]")
+    df_fused["organism"] = df_fused["subject_title"].str.extract(r'\[([^\]]+)\]$')[0]
+
+    # Count unique organisms for each GENE PAIR (not protein isoform pair)
+    # This way different isoforms of the same gene pair count as one
+    organism_counts = df_fused.groupby(["gene_1", "gene_2"])["organism"].nunique().to_dict()
+
+    # Step 3: Define scoring function that will be applied to each row
+    def calculate_row_score(row):
+        # Get control bitscores
+        control_bs_1 = control_bitscore_dict.get(row["product_1"], None)
+        control_bs_2 = control_bitscore_dict.get(row["product_2"], None)
+
+        # Get organism count for this gene pair (not isoform pair)
+        org_count = organism_counts.get((row["gene_1"], row["gene_2"]), 1)
+
+        # Calculate composite score
+        score = scoring.calculate_composite_score(
+            query_coverage=row["query_coverage"],
+            fused_bitscore=row["bit_score"],
+            control_bitscore_1=control_bs_1,
+            control_bitscore_2=control_bs_2,
+            start_query=row["start_of_alignment_in_query"],
+            end_query=row["end_of_alignment_in_query"],
+            gene_1_len=row["gene_1_len"],
+            organism_hit_count=org_count,
+            evalue=row["expected_value"]
+        )
+
+        return score
+
+    # Step 3: Apply scoring function to each row
+    df_fused["composite_score"] = df_fused.apply(calculate_row_score, axis=1)
+
+    # Step 4: Add organism_count column (use gene pair lookup)
+    df_fused["organism_count"] = df_fused.apply(
+        lambda row: organism_counts.get((row["gene_1"], row["gene_2"]), None),
+        axis=1
+    )
+
+    # Step 5: Add _aa suffix to gene length columns and drop legacy columns
+    columns_to_drop = ["organism"]  # Start with temporary organism column
+
+    if "gene_1_len" in df_fused.columns:
+        df_fused["gene_1_len_aa"] = df_fused["gene_1_len"]
+        columns_to_drop.append("gene_1_len")
+    if "gene_2_len" in df_fused.columns:
+        df_fused["gene_2_len_aa"] = df_fused["gene_2_len"]
+        columns_to_drop.append("gene_2_len")
+    if "fused_gene_len" in df_fused.columns:
+        df_fused["fused_gene_len_aa"] = df_fused["fused_gene_len"]
+        columns_to_drop.append("fused_gene_len")
+
+    # Step 5.5: Add alignment position ranges (both normalized and absolute)
+    # Normalized ranges (0-1 scale, rounded to 4 decimal places)
+    if "start_of_alignment_in_query" in df_fused.columns and "query_length" in df_fused.columns:
+        start_norm = (df_fused["start_of_alignment_in_query"] / df_fused["query_length"]).round(4)
+        end_norm = (df_fused["end_of_alignment_in_query"] / df_fused["query_length"]).round(4)
+        df_fused["alignment_range_in_query_norm"] = start_norm.astype(str) + "-" + end_norm.astype(str)
+
+    if "start_of_alignment_in_subject" in df_fused.columns and "subject_length" in df_fused.columns:
+        start_norm = (df_fused["start_of_alignment_in_subject"] / df_fused["subject_length"]).round(4)
+        end_norm = (df_fused["end_of_alignment_in_subject"] / df_fused["subject_length"]).round(4)
+        df_fused["alignment_range_in_subject_norm"] = start_norm.astype(str) + "-" + end_norm.astype(str)
+
+    # Absolute ranges (amino acid positions)
+    if "start_of_alignment_in_query" in df_fused.columns and "end_of_alignment_in_query" in df_fused.columns:
+        df_fused["alignment_range_in_query"] = df_fused["start_of_alignment_in_query"].astype(str) + "-" + df_fused["end_of_alignment_in_query"].astype(str)
+
+    if "start_of_alignment_in_subject" in df_fused.columns and "end_of_alignment_in_subject" in df_fused.columns:
+        df_fused["alignment_range_in_subject"] = df_fused["start_of_alignment_in_subject"].astype(str) + "-" + df_fused["end_of_alignment_in_subject"].astype(str)
+
+    # Step 6: Drop individual start/end columns (now replaced by ranges)
+    columns_to_drop.extend([
+        "start_of_alignment_in_query",
+        "end_of_alignment_in_query",
+        "start_of_alignment_in_subject",
+        "end_of_alignment_in_subject"
+    ])
+
+    # Step 7: Sort by score (descending) for easier analysis
+    df_fused = df_fused.sort_values(by="composite_score", ascending=False).reset_index(drop=True)
+
+    # Remove temporary columns (organism, legacy length columns, and individual position columns)
+    df_fused = df_fused.drop(columns=columns_to_drop)
+
+    return df_fused
+
 # Wrapping the main script code in main lets us use the other functions in other scripts without calling the whole thing.
 if __name__ == "__main__":
     # Argument method validators
@@ -686,21 +884,32 @@ if __name__ == "__main__":
     if fused_hits_genome_df_list:
         fused_hits = pd.concat(fused_hits_genome_df_list, ignore_index=True)
         fused_hits = fused_hits[~fused_hits["subject_title"].str.contains(organism_name, regex=False, na=False)]
-        
+
         # Getting only best score for each protein/fused protein
         min_eval_fuse = fused_hits.groupby("fused_protein")["expected_value"].idxmin()
         fused_hits_filter = fused_hits.loc[min_eval_fuse].reset_index(drop=True)
         min_eval_control = control_hits.groupby("protein")["expected_value"].idxmin()
         control_hits_filter = control_hits.loc[min_eval_control].reset_index(drop=True)
-        fused_hits_filter.to_csv(f"{output_folder}/fused_hits.csv")
-        control_hits_filter.to_csv(f"{output_folder}/control_hits.csv")
-        
-        # Comparing fused hits to control hits based on bit-score improvement
-        df_fused_higher, df_fused_lower = compare_bitscores(fused_hits_filter, control_hits_filter)
-        
+
+        # Calculate composite scores for all fused hits
+        print("Calculating composite scores for fused gene hits...")
+        fused_hits_scored = calculate_scores_for_hits(fused_hits_filter, control_hits_filter, gff_file)
+
+        # Generate all output formats (CSV, TSV, Excel)
+        print("Generating output files...")
+        output_formatter.generate_all_outputs(
+            df_fused=fused_hits_scored,
+            df_control=control_hits_filter,
+            organism_name=organism_name,
+            output_folder=output_folder
+        )
+
+        # For backwards compatibility, also create the old-style outputs
+        # (These will be deprecated in favor of the new formatted outputs)
+        df_fused_higher, df_fused_lower = compare_bitscores(fused_hits_scored, control_hits_filter)
         df_fused_higher.to_csv(f"{output_folder}/higher_bitscore.csv")
         df_fused_lower.to_csv(f"{output_folder}/lower_bitscore.csv")
-        
+
     else:
         print("No fused genes found across all chromosomes/strands.")
         # Create empty results file with proper headers
