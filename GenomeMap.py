@@ -31,6 +31,12 @@ class GeneNode:
         self.protein_isoforms[key] = value[0]
         self.description = value[1]
 
+    def get_longest_isoform(self) -> Optional[tuple]:
+        """Return (isoform_id, sequence) of the longest isoform for a gene, or None if none exist."""
+        if not self.protein_isoforms:
+            return None
+        return max(self.protein_isoforms.items(), key=lambda x: len(x[1]))
+    
     def __repr__(self) -> str:
         return f"GeneNode(gene_id='{self.gene_id}', protein_isoforms={self.protein_isoforms}, neighbors={len(self.neighbors)})"
 

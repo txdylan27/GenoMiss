@@ -39,7 +39,7 @@ def construct_faa_string(proteinID, proteinDescription, proteinSequence):
     desc = f"{proteinDescription}" if proteinDescription else ""
     return f">{proteinID} {desc}\n{proteinSequence}\n"
 
-def chromosome_processor_unfused_allisoforms(chrom, strand, headNode: GenomeMap.GeneNode, output_prefix, fused_chrom_hits_df):
+def chromosome_processor_unfused_allisoforms(chrom, strand, headNode: GenomeMap.GeneNode, output_prefix, fused_chrom_hits_df, longest_only):
     """
     Traverse all genes in the chromosome strand graph using BFS (Breadth-First Search).
     Handles branching paths from overlapping genes and convergence points.
@@ -60,8 +60,14 @@ def chromosome_processor_unfused_allisoforms(chrom, strand, headNode: GenomeMap.
             continue
         visited.add(currentNode.gene_id)
 
+        # Handling of longest isoform mode
+        if longest_only == True:
+            current_node_isoforms = [currentNode.get_longest_isoform()]
+        else:
+            current_node_isoforms = currentNode.protein_isoforms.items()
+
         # Process all protein isoforms for this gene
-        for isoformID, isoformAA in currentNode.protein_isoforms.items():
+        for isoformID, isoformAA in current_node_isoforms:
             # Checking for matches
             if isoformID in product1_set or isoformID in product2_set:
                 protString = construct_faa_string(isoformID, currentNode.description, isoformAA)
@@ -77,7 +83,7 @@ def chromosome_processor_unfused_allisoforms(chrom, strand, headNode: GenomeMap.
 
     return temp_fasta_path
 
-def chromosome_processor_fused_allisoforms(chrom, strand, headNode: GenomeMap.GeneNode, output_prefix):
+def chromosome_processor_fused_allisoforms(chrom, strand, headNode: GenomeMap.GeneNode, output_prefix, longest_only):
     """
     Traverse all genes and create fused proteins between each gene and its neighbors.
     Uses BFS to handle branching/converging paths from overlapping genes.
@@ -108,10 +114,18 @@ def chromosome_processor_fused_allisoforms(chrom, strand, headNode: GenomeMap.Ge
                 if edge in visited_edges:
                     continue
                 visited_edges.add(edge)
+                
+                # Handling of longest isoform mode
+                if longest_only == True:
+                    current_node_isoforms = [currentNode.get_longest_isoform()]
+                    neighor_node_isoforms = [neighbor.get_longest_isoform()]
+                else:
+                    current_node_isoforms = currentNode.protein_isoforms.items()
+                    neighor_node_isoforms = neighbor.protein_isoforms.items()
 
                 # Create all possible isoform combinations (Cartesian product)
-                for isoformID1, isoformAA1 in currentNode.protein_isoforms.items():
-                    for isoformID2, isoformAA2 in neighbor.protein_isoforms.items():
+                for isoformID1, isoformAA1 in current_node_isoforms:
+                    for isoformID2, isoformAA2 in neighor_node_isoforms:
                         # Fuse IDs with underscore
                         fusedID = f"{isoformID1}_{isoformID2}"
                         # Concatenate protein sequences
@@ -148,17 +162,6 @@ def chromosome_processor_fused_allisoforms(chrom, strand, headNode: GenomeMap.Ge
     metadata_df = pd.DataFrame(fused_metadata)
     return temp_fasta_path, metadata_df
 
-def isoform_picker(joined_df):
-    """Function that goes through the inputted dataframe and analyzes the length of each gene, keeping only the longest gene of multiple 
-    entries of the same gene. This is a means to keep only the longest isoform of a gene with multiple isoforms. Returns a dataframe with 
-    only one entry per gene."""
-    
-    joined_df['sequence_length'] = joined_df['sequence'].apply(len) # Get the length of each gene's sequence.
-    joined_df = joined_df.loc[joined_df.groupby(['gene'])['sequence_length'].idxmax()] # Keep only the gene with the longest sequence length.
-    joined_df = joined_df.drop(columns=['sequence_length'])
-    joined_df = joined_df.sort_values(by=['start', 'end'])
-    
-    return joined_df
 
 def unfused_diamond_alignment(chrom, strand_name, diamond_path, diamond_db, genome_faa_path, num_threads, output_prefix, diamond_sensitivity=None):
     """Function used to get the original alignment scores to use as a comparison with the fused gene alignments."""
@@ -729,7 +732,7 @@ if __name__ == "__main__":
                 f"Invalid sensitivity mode '{value}'. Must be one of: {', '.join(valid_modes)}"
             )
         return value
-
+    
     # Argparse setup
     parser = argparse.ArgumentParser(prog="Genome Misannotation Checker")
 
@@ -774,6 +777,10 @@ if __name__ == "__main__":
                         help="Sensitivity mode parameter for the Diamond alignment tool. Valid options: fast, mid-sensitive, sensitive, more-sensitive, very-sensitive, ultra-sensitive",
                         type=valid_sensitivity,
                         default=None)
+    
+    parser.add_argument('-lo', '--longest_only',
+                        help="Choose whether each isoform or only the longest isoform for each gene is fused. Default is False meaning that each isoform is fused.",
+                        action="store_true")
 
     args = parser.parse_args()
 
@@ -803,6 +810,8 @@ if __name__ == "__main__":
         diamond_sensitivity = "--" + args.diamond_sensitivity
     else:
         diamond_sensitivity = args.diamond_sensitivity
+    longest_only = args.longest_only
+    
 
     # Create output folder if it doesn't exist
     if not os.path.exists(output_folder):
@@ -850,7 +859,7 @@ if __name__ == "__main__":
                     pbar.update(2) 
                 else:
                     # Process fused proteins first
-                    temp_faa_filepath, fused_metadata_df = chromosome_processor_fused_allisoforms(chrom, strand, headNode, output_prefix)
+                    temp_faa_filepath, fused_metadata_df = chromosome_processor_fused_allisoforms(chrom, strand, headNode, output_prefix, longest_only)
 
                     # Check if there are any fusions to process
                     if os.path.getsize(temp_faa_filepath) > 0 and not fused_metadata_df.empty:
@@ -867,7 +876,7 @@ if __name__ == "__main__":
                     pbar.update(1)
                     
                     # Process unfused proteins second
-                    temp_faa_filepath = chromosome_processor_unfused_allisoforms(chrom, strand, headNode, output_prefix, fused_chrom_hits_df)
+                    temp_faa_filepath = chromosome_processor_unfused_allisoforms(chrom, strand, headNode, output_prefix, fused_chrom_hits_df, longest_only)
                     if os.path.exists(temp_faa_filepath) and os.path.getsize(temp_faa_filepath) > 0:
                         with open(temp_faa_filepath, "r") as temp_faa, open(genome_faa_path, "a") as genome_faa:
                             genome_faa.write(temp_faa.read())
