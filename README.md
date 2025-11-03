@@ -1,4 +1,4 @@
-# Gene Misannotation Tool
+# GENOMISS
 
 ![Python](https://img.shields.io/badge/python-3.12.7-blue.svg)
 ![GitHub issues](https://img.shields.io/github/issues/txdylan27/Gene-Misannotation-Tool)
