@@ -75,7 +75,7 @@ sudo mv diamond /usr/local/bin/
 ### Basic Usage
 
 ```bash
-python misannotation_checker.py \
+python GenoMiss.py \
   -p <proteome.faa> \
   -a <annotation.gff> \
   -db <reference.dmnd> \
@@ -85,7 +85,7 @@ python misannotation_checker.py \
 ### Example
 
 ```bash
-python misannotation_checker.py \
+python GenoMiss.py \
   -p apis_mellifera_protein.faa \
   -a apis_mellifera_annotation.gff \
   -db insecta_refseq_protein_db.dmnd \
