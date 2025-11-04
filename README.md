@@ -1,11 +1,11 @@
-# GENOMISS
+# GenoMiss
 
 ![Python](https://img.shields.io/badge/python-3.12.7-blue.svg)
-![GitHub issues](https://img.shields.io/github/issues/txdylan27/Gene-Misannotation-Tool)
-![GitHub last commit](https://img.shields.io/github/last-commit/txdylan27/Gene-Misannotation-Tool)
-![License](https://img.shields.io/github/license/txdylan27/Gene-Misannotation-Tool)
+![GitHub issues](https://img.shields.io/github/issues/txdylan27/GenoMiss)
+![GitHub last commit](https://img.shields.io/github/last-commit/txdylan27/GenoMiss)
+![License](https://img.shields.io/github/license/txdylan27/GenoMiss)
 
-A computational tool for detecting potential gene misannotations in protein-coding genomes. The tool identifies cases where adjacent genes may actually represent fragments of a single mis-annotated gene by fusing neighboring genes and comparing their alignment scores against a reference protein database.
+GenoMiss is a computational tool for detecting potential gene misannotations in protein-coding genomes. GenoMiss identifies cases where adjacent genes may actually represent fragments of a single misannotated gene by fusing neighboring genes and comparing their alignment scores against a reference protein database.
 
 ## Overview
 
@@ -50,8 +50,8 @@ Gene misannotations can occur when sequencing errors, assembly issues, or annota
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/txdylan27/Gene-Misannotation-Tool.git
-cd Gene-Misannotation-Tool
+git clone https://github.com/txdylan27/GenoMiss.git
+cd GenoMiss
 ```
 
 2. Install Python dependencies:
@@ -187,8 +187,8 @@ The tool uses a composite scoring system (0-100 scale) that combines five compon
 ## Project Structure
 
 ```
-Gene-Misannotation-Tool/
-├── misannotation_checker.py   # Main program and CLI interface
+GenoMiss/
+├── GenoMiss.py                 # Main program and CLI interface
 ├── GenomeMap.py                # Genome graph data structures
 ├── scoring.py                  # Composite scoring system
 ├── output_formatter.py         # Multi-format report generation
@@ -224,7 +224,6 @@ Contributions are welcome! Please feel free to submit issues or pull requests.
 ## Acknowledgments
 
 - DIAMOND alignment tool by Benjamin Buchfink
-- Inspired by challenges in comparative genomics and genome annotation quality control
 
 ## Contact
 
