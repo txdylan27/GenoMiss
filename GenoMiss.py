@@ -915,9 +915,9 @@ if __name__ == "__main__":
 
         # For backwards compatibility, also create the old-style outputs
         # (These will be deprecated in favor of the new formatted outputs)
-        df_fused_higher, df_fused_lower = compare_bitscores(fused_hits_scored, control_hits_filter)
-        df_fused_higher.to_csv(f"{output_folder}/higher_bitscore.csv")
-        df_fused_lower.to_csv(f"{output_folder}/lower_bitscore.csv")
+        # df_fused_higher, df_fused_lower = compare_bitscores(fused_hits_scored, control_hits_filter)
+        # df_fused_higher.to_csv(f"{output_folder}/higher_bitscore.csv")
+        # df_fused_lower.to_csv(f"{output_folder}/lower_bitscore.csv")
 
     else:
         print("No fused genes found across all chromosomes/strands.")
