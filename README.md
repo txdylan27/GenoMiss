@@ -135,8 +135,6 @@ The tool generates multiple output files in the specified output directory:
 |------|-------------|
 | `args.log` | Command-line arguments used for the analysis |
 | `genome_wide_positive_hits.faa` | FASTA file containing gene parts that were components of positive fused hits |
-| `higher_bitscore.csv` | Legacy output: fused genes with higher bit scores than both gene parts |
-| `lower_bitscore.csv` | Legacy output: fused genes with lower bit scores than both gene parts |
 | `<chrom>/<strand>/` | Per-chromosome/strand intermediate files and DIAMOND results |
 
 ## Scoring Methodology
