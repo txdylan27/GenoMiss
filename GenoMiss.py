@@ -798,7 +798,7 @@ if __name__ == "__main__":
     # TODO: Implement -n parameter
     if organism_name is None:
         print("ERROR: Organism name not detected. Please enter it manually using the '-n' or '--name' parameter.")
-        exit()
+        organism_name = input("Enter the scientific name of your organism: ")
 
     diamond_path = shutil.which("diamond")
     if diamond_path is None:
