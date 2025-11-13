@@ -1,2 +1,7 @@
+debug_genomemap.py
+.idea/
 __pycache__/
-*.py[cod]
+*.gff
+*.fna
+*.dmnd
+*.faa
