@@ -302,7 +302,8 @@ def genecount_filtered_chromosomes(gffFile, minGenePerX):
 # Returns a dictionary of protein ID's to [sequence, description]
 def process_faa(faaFile):
     faaDict = {}
-    pattern = r'>(\S+)\s+(.+?)(?:\s+\[([^\]]+)\])?$'
+    # Made description optional to handle headers like ">PROTEIN_ID" without description
+    pattern = r'>(\S+)(?:\s+(.+?)(?:\s+\[([^\]]+)\])?)?$'
 
     protein_id = None
     description = None
@@ -320,7 +321,7 @@ def process_faa(faaFile):
                 match = re.search(pattern, line)
                 if match:
                     protein_id = match.group(1)
-                    description = match.group(2)
+                    description = match.group(2)  # Can be None if no description
                     #organism = match.group(3)  # Optional: store if needed
                 else:
                     print(f"WARNING: Problem parsing line: {line.strip()} in the .faa file!")
