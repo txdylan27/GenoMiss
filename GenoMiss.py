@@ -230,8 +230,13 @@ def fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_fasta_pat
     fused_diamond_df = fused_metadata_df.merge(fused_metadata_df.merge(diamond_df, how='outer', on='fused_protein', sort=False))
     
     # Only filtering for fused genes that have overlaps with at least 10 AAs, maybe make this user-inputted
-    fused_hits_df = fused_diamond_df[(fused_diamond_df["start_of_alignment_in_query"] < (fused_diamond_df["gene_1_len"]-10)) &
-                                     (fused_diamond_df["end_of_alignment_in_query"] > (fused_diamond_df["gene_1_len"]+10))].copy()
+    fused_hits_df = fused_diamond_df[
+        (fused_diamond_df["start_of_alignment_in_query"] < (fused_diamond_df["gene_1_len"]-10)) &
+        (fused_diamond_df["end_of_alignment_in_query"] > (fused_diamond_df["gene_1_len"]+10)) &
+        (fused_diamond_df["query_coverage"] >= 50) &
+        (fused_diamond_df["percentage_of_identical_matches"] >= 50) &
+        (~fused_diamond_df["subject_title"].str.contains("uncharacterized", case=False, na=False))
+    ].copy()
     
     
     os.remove(temp_fasta_path)
@@ -611,7 +616,8 @@ def calculate_scores_for_hits(df_fused, df_control, gff_file=None):
             end_query=row["end_of_alignment_in_query"],
             gene_1_len=row["gene_1_len"],
             organism_hit_count=org_count,
-            evalue=row["expected_value"]
+            evalue=row["expected_value"],
+            percent_identity=row["percentage_of_identical_matches"]
         )
 
         return score
@@ -894,30 +900,21 @@ if __name__ == "__main__":
         fused_hits = pd.concat(fused_hits_genome_df_list, ignore_index=True)
         fused_hits = fused_hits[~fused_hits["subject_title"].str.contains(organism_name, regex=False, na=False)]
 
-        # Getting only best score for each protein/fused protein
-        min_eval_fuse = fused_hits.groupby("fused_protein")["expected_value"].idxmin()
-        fused_hits_filter = fused_hits.loc[min_eval_fuse].reset_index(drop=True)
-        min_eval_control = control_hits.groupby("protein")["expected_value"].idxmin()
-        control_hits_filter = control_hits.loc[min_eval_control].reset_index(drop=True)
-
         # Calculate composite scores for all fused hits
         print("Calculating composite scores for fused gene hits...")
-        fused_hits_scored = calculate_scores_for_hits(fused_hits_filter, control_hits_filter, gff_file)
+        fused_hits_scored = calculate_scores_for_hits(fused_hits, control_hits, gff_file)
+        highest_composite_score = fused_hits_scored.groupby("fused_protein")["composite_score"].idxmax()
+        fused_hits_scored_filtered = fused_hits_scored.loc[highest_composite_score].reset_index(drop=True)
+        fused_hits_scored_filtered = fused_hits_scored_filtered.sort_values(by="composite_score", ascending=False).reset_index(drop=True)
 
         # Generate all output formats (CSV, TSV, Excel)
         print("Generating output files...")
         output_formatter.generate_all_outputs(
-            df_fused=fused_hits_scored,
-            df_control=control_hits_filter,
+            df_fused=fused_hits_scored_filtered,
+            df_control=control_hits,
             organism_name=organism_name,
             output_folder=output_folder
         )
-
-        # For backwards compatibility, also create the old-style outputs
-        # (These will be deprecated in favor of the new formatted outputs)
-        # df_fused_higher, df_fused_lower = compare_bitscores(fused_hits_scored, control_hits_filter)
-        # df_fused_higher.to_csv(f"{output_folder}/higher_bitscore.csv")
-        # df_fused_lower.to_csv(f"{output_folder}/lower_bitscore.csv")
 
     else:
         print("No fused genes found across all chromosomes/strands.")

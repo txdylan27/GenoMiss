@@ -75,7 +75,7 @@ COLUMN_ORDER = [
     "number_of_identical_matches",
     "number_of_mismatches",
     "query_length",
-    "query_title",
+    "query_title"
 ]
 
 

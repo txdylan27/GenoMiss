@@ -20,14 +20,15 @@ Weights can be easily adjusted via the coefficient constants below.
 # All coefficients should sum to 1.0 for a proper weighted average
 
 WEIGHT_QUERY_COVERAGE = 0.50      # Percentage of fused gene aligned
-WEIGHT_BITSCORE_IMPROVEMENT = 0.25  # Bit score improvement over control
-WEIGHT_OVERLAP_EQUILIBRIUM = 0.05   # Balance between gene part matches
-WEIGHT_ORGANISM_COUNT = 0.15        # Number of organism hits
+WEIGHT_BITSCORE_IMPROVEMENT = 0.15  # Bit score improvement over control
+WEIGHT_OVERLAP_EQUILIBRIUM = 0.00   # Balance between gene part matches
+WEIGHT_ORGANISM_COUNT = 0.10        # Number of organism hits
 WEIGHT_EVALUE = 0.05                # E-value significance (lower is better)
+WEIGHT_PIDENT = 0.20                # Percent identity (higher the better)
 
 # Sanity check for weights
 assert abs(WEIGHT_QUERY_COVERAGE + WEIGHT_BITSCORE_IMPROVEMENT +
-           WEIGHT_OVERLAP_EQUILIBRIUM + WEIGHT_ORGANISM_COUNT + WEIGHT_EVALUE - 1.0) < 0.001, \
+           WEIGHT_OVERLAP_EQUILIBRIUM + WEIGHT_ORGANISM_COUNT + WEIGHT_EVALUE + WEIGHT_PIDENT - 1.0) < 0.001, \
        "Scoring weights must sum to 1.0"
 
 # ============================================================================
@@ -147,23 +148,17 @@ def calculate_organism_count_score(organism_hit_count):
         float: Score from 0-100
 
     Logic:
-        - More organisms = higher confidence the fusion is real
-        - Logarithmic scaling to avoid over-weighting this factor
-        - 1 organism → score 50
-        - 5 organisms → score 100
-        - 10+ organisms → capped at 100
-
-    Note: This score is calculated separately and passed in, as it requires
-          grouping operations across the entire dataset.
+        - Linear scaling: 0 organisms → 0 points, 25 organisms → 100 points
+        - Any count ≥25 → capped at 100
     """
     if organism_hit_count <= 0:
         return 0.0
 
-    # Logarithmic scaling with base case: 1 organism = 50 points
-    import math
-    score = 50 + (50 * math.log(organism_hit_count, 5))
+    # Linear scaling up to 25 organisms
+    score = (organism_hit_count / 25) * 100
 
-    return min(100.0, max(0.0, score))
+    # Cap at 100
+    return round(min(100.0, score), 2)
 
 
 def calculate_evalue_score(evalue):
@@ -204,10 +199,26 @@ def calculate_evalue_score(evalue):
 
     return score
 
+def calculate_percent_identity_score(percent_identity):
+    """
+    Calculate score based on percent identity between query and subject.
+
+    Args:
+        percent_identity (float): Percentage of identical residues (50–100)
+
+    Returns:
+        float: Score from 0–100
+
+    Logic:
+        - Direct linear mapping for percent identities ≥ 50%
+        - Cap at 100 to avoid overflow
+    """
+    return min(100.0, max(0.0, percent_identity))
+
 
 def calculate_composite_score(query_coverage, fused_bitscore, control_bitscore_1,
                               control_bitscore_2, start_query, end_query,
-                              gene_1_len, organism_hit_count, evalue):
+                              gene_1_len, organism_hit_count, evalue, percent_identity):
     """
     Calculate the final composite score combining all factors.
 
@@ -221,6 +232,7 @@ def calculate_composite_score(query_coverage, fused_bitscore, control_bitscore_1
         gene_1_len (int): Length of first gene part
         organism_hit_count (int): Number of organisms with hits to this fused gene
         evalue (float): E-value of the alignment
+        percent_identity : Percentage of identical matches between subject and query
 
     Returns:
         float: Composite score from 0-100
@@ -230,7 +242,8 @@ def calculate_composite_score(query_coverage, fused_bitscore, control_bitscore_1
                 (w2 × bitscore_improvement_score) +
                 (w3 × overlap_equilibrium_score) +
                 (w4 × organism_count_score) +
-                (w5 × evalue_score)
+                (w5 × evalue_score) +
+                (w6 x percent_identity)
 
     where w1, w2, w3, w4, w5 are the weight coefficients defined at module level.
     """
@@ -244,6 +257,7 @@ def calculate_composite_score(query_coverage, fused_bitscore, control_bitscore_1
     )
     organism_score = calculate_organism_count_score(organism_hit_count)
     evalue_score = calculate_evalue_score(evalue)
+    identity_score = calculate_percent_identity_score(percent_identity)
 
     # Weighted combination
     composite = (
@@ -251,7 +265,8 @@ def calculate_composite_score(query_coverage, fused_bitscore, control_bitscore_1
         WEIGHT_BITSCORE_IMPROVEMENT * bitscore_score +
         WEIGHT_OVERLAP_EQUILIBRIUM * equilibrium_score +
         WEIGHT_ORGANISM_COUNT * organism_score +
-        WEIGHT_EVALUE * evalue_score
+        WEIGHT_EVALUE * evalue_score +
+        WEIGHT_PIDENT * identity_score
     )
 
     return round(composite, 2)
