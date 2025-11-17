@@ -9,32 +9,27 @@ GenoMiss is a computational tool for detecting potential gene misannotations in 
 
 ## Overview
 
-Gene misannotations can occur when sequencing errors, assembly issues, or annotation pipeline limitations cause a single gene to be incorrectly split into multiple adjacent genes. This tool addresses this problem by:
+Our tool was built to detect gene missanotations in species were intron can be greater than the cutoff value used by most aligners (500-600 KB), but it can also be used to detect misannotations in general. This tool aims to provide a list of potentially missanotated genes without requiring large computational resources. 
+These genes can then be evaluted in wet-lab or by re-running computationally expensive annotation pipelines such as EGAPX.
 
-1. **Constructing a genome graph** representing the spatial relationships between protein-coding genes
-2. **Creating fusion proteins** by concatenating adjacent gene sequences
-3. **Aligning fused and unfused proteins** against a reference database using DIAMOND
-4. **Scoring alignment quality** using a composite scoring system that evaluates multiple factors
-5. **Generating comprehensive reports** in multiple formats (CSV, TSV, Excel)
 
 ## Features
 
-- **Graph-based genome representation**: Handles overlapping genes and complex genomic architectures using strand-specific directed graphs
-- **Comprehensive scoring system**: Evaluates fused genes based on query coverage, bit score improvement, alignment equilibrium, organism hit count, and e-value significance
-- **Multi-format output**: Generates CSV, TSV, and Excel reports with professional formatting and documentation
-- **Parallel processing**: Utilizes multiple CPU threads for faster DIAMOND alignments
+- **Graph-based genome representation**: Handles overlapping genes and complex genomic architectures using strand-specific acyclic directed graphs
+- **Comprehensive scoring system**: Evaluates fused genes candidates based on query coverage, overlap area, sequence identity, bit score improvement, organism hit count, and e-value significance
+- **Implemented with parallel processing**: Coded to use multiple CPU threads to rapidly generate results, often within ~30 minutes!
 - **Flexible filtering**: Customizable thresholds for percent identity, chromosome/contig filtering, and alignment sensitivity
-- **Detailed statistics**: Includes intron length calculations, organism diversity metrics, and confidence categorization
+- **Detailed statistics**: Includes intron length calculations, organism count hits, confidence categorization, etc.
 
 ## Requirements
 
 ### Software Dependencies
 
-- **Python 3.7+** with the following packages:
+- **Python 3.12** with the following packages:
   - `pandas` - Data manipulation and analysis
   - `tqdm` - Progress bar visualization
   - `regex` - Enhanced regular expression support
-  - `openpyxl` (optional) - Excel file generation
+  - `openpyxl` - Excel file generation
 
 - **DIAMOND** - Fast protein sequence aligner
   - Must be installed and available in your system PATH
@@ -44,7 +39,7 @@ Gene misannotations can occur when sequencing errors, assembly issues, or annota
 
 1. **Proteome file** (`.faa`) - FASTA file containing all protein sequences for the organism
 2. **Genome annotation** (`.gff`) - GFF3 format annotation file (RefSeq recommended)
-3. **Reference database** (`.dmnd`) - Pre-built DIAMOND database of reference proteins
+3. **Reference database** (`.dmnd`) - Pre-built DIAMOND database of reference proteins. It is recommendeded to use a proteome containing organisms from the same class as the species of interest (ergo, Insecta for _Drosophila_ and Mammalia for _Mouse_)
 
 ## Installation
 
@@ -110,7 +105,7 @@ python GenoMiss.py \
 | Option | Default | Description |
 |--------|---------|-------------|
 | `-t`, `--num_threads` | Half of available CPU cores | Number of threads for DIAMOND alignment (positive integer) |
-| `-i`, `--identity_cutoff` | 0.00 | Percent identity cutoff for filtering fused gene alignments (0.0-100.0) |
+| `-i`, `--identity_cutoff` | 50 | Percent identity cutoff for filtering fused gene alignments (0.0-100.0)  |
 | `-xf`, `--xfilter` | 5 | Minimum number of genes required per chromosome/contig for analysis (filters out small contigs) |
 | `-ds`, `--diamond_sensitivity` | None | DIAMOND sensitivity mode: `fast`, `mid-sensitive`, `sensitive`, `more-sensitive`, `very-sensitive`, or `ultra-sensitive` |
 
@@ -155,7 +150,7 @@ The tool uses a composite scoring system (0-100 scale) that combines five compon
 - **Medium Confidence (40-69)**: Moderate evidence; warrants manual inspection
 - **Low Confidence (<40)**: Weak evidence; may represent false positives or edge cases
 
-## Algorithm Overview
+## How It Works
 
 1. **Genome Map Construction**
    - Parse GFF annotation to identify protein-coding genes
