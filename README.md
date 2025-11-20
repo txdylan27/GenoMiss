@@ -86,7 +86,8 @@ python GenoMiss.py \
   -db insecta_refseq_protein_db.dmnd \
   -o honeybee_results \
   -t 16 \
-  -ds very-sensitive
+  -ds very-sensitive \
+  -lo
 ```
 
 ### Command-Line Options
@@ -108,6 +109,7 @@ python GenoMiss.py \
 | `-i`, `--identity_cutoff` | 50 | Percent identity cutoff for filtering fused gene alignments (0.0-100.0)  |
 | `-xf`, `--xfilter` | 5 | Minimum number of genes required per chromosome/contig for analysis (filters out small contigs) |
 | `-ds`, `--diamond_sensitivity` | None | DIAMOND sensitivity mode: `fast`, `mid-sensitive`, `sensitive`, `more-sensitive`, `very-sensitive`, or `ultra-sensitive` |
+| `-lo`, `--longest_only` | False | Selects whether all isoforms will be fused to neighboring proteins. If set to True, only the longest isoform is considered |
 
 ## Output Files
 
