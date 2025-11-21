@@ -141,9 +141,9 @@ The tool uses a composite scoring system (0-100 scale) that combines five compon
 | Component | Weight | Description |
 |-----------|--------|-------------|
 | **Query Coverage** | 50% | Percentage of the fused protein sequence covered by the alignment |
-| **Bit Score Improvement** | 25% | Relative improvement of fused protein bit score compared to individual gene part bit scores |
-| **Overlap Equilibrium** | 5% | Balance of alignment between the two gene parts (favors alignments spanning both genes evenly) |
-| **Organism Count** | 15% | Number of different organisms with hits to the fused gene (higher diversity increases confidence) |
+| **Bit Score Improvement** | 15% | Relative improvement of fused protein bit score compared to individual gene part bit scores |
+| **Organism Count** | 10% | Number of different organisms with hits to the fused gene |
+| **Percent Identity** | 20% | Percentage of identical matches between the fused protein and the aligned subject |
 | **E-value** | 5% | Statistical significance of the alignment (lower e-values increase confidence) |
 
 ### Score Interpretation
