@@ -285,14 +285,16 @@ def get_scoring_info():
             "bitscore_improvement": WEIGHT_BITSCORE_IMPROVEMENT,
             "overlap_equilibrium": WEIGHT_OVERLAP_EQUILIBRIUM,
             "organism_count": WEIGHT_ORGANISM_COUNT,
-            "evalue": WEIGHT_EVALUE
+            "evalue": WEIGHT_EVALUE,
+            "pident": WEIGHT_PIDENT
         },
         "descriptions": {
             "query_coverage": "Percentage of fused gene sequence covered by alignment",
             "bitscore_improvement": "Relative improvement of fused vs control bit scores",
             "overlap_equilibrium": "Balance of alignment between two gene parts (favors 50-50)",
             "organism_count": "Number of different organisms with hits to this fused gene",
-            "evalue": "E-value significance of alignment (lower is better)"
+            "evalue": "E-value significance of alignment (lower is better)",
+            "pident": "Percent identity between query and subject sequences"
         },
         "score_range": "0-100 (higher = more likely true misannotation)"
     }

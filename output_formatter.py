@@ -175,6 +175,8 @@ def create_summary_header(stats, scoring_info):
 # Bit Score Improvement Weight: {scoring_info['weights']['bitscore_improvement']} - {scoring_info['descriptions']['bitscore_improvement']}
 # Overlap Equilibrium Weight: {scoring_info['weights']['overlap_equilibrium']} - {scoring_info['descriptions']['overlap_equilibrium']}
 # Organism Count Weight: {scoring_info['weights']['organism_count']} - {scoring_info['descriptions']['organism_count']}
+# E-value Weight: {scoring_info['weights']['evalue']} - {scoring_info['descriptions']['evalue']}
+# Percent Identity Weight: {scoring_info['weights']['pident']} - {scoring_info['descriptions']['pident']}
 #
 """
 
@@ -397,6 +399,16 @@ def create_excel_workbook(df_fused, df_control, stats, scoring_info, output_path
     ws_info.cell(row, 1, "Organism Count")
     ws_info.cell(row, 2, scoring_info['weights']['organism_count'])
     ws_info.cell(row, 3, scoring_info['descriptions']['organism_count'])
+
+    row += 1
+    ws_info.cell(row, 1, "E-value")
+    ws_info.cell(row, 2, scoring_info['weights']['evalue'])
+    ws_info.cell(row, 3, scoring_info['descriptions']['evalue'])
+
+    row += 1
+    ws_info.cell(row, 1, "Percent Identity")
+    ws_info.cell(row, 2, scoring_info['weights']['pident'])
+    ws_info.cell(row, 3, scoring_info['descriptions']['pident'])
 
     # Adjust column widths
     ws_info.column_dimensions['A'].width = 25
