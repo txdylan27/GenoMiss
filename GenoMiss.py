@@ -61,8 +61,8 @@ def chromosome_processor_unfused_allisoforms(chrom, strand, headNode: GenomeMap.
         visited.add(currentNode.gene_id)
 
         # Handling of longest isoform mode
-        if longest_only == True:
-            current_node_isoforms = [currentNode.get_longest_isoform()]
+        if longest_only:
+            current_node_isoforms = currentNode.get_longest_isoform()
         else:
             current_node_isoforms = currentNode.protein_isoforms.items()
 
@@ -116,9 +116,9 @@ def chromosome_processor_fused_allisoforms(chrom, strand, headNode: GenomeMap.Ge
                 visited_edges.add(edge)
                 
                 # Handling of longest isoform mode
-                if longest_only == True:
-                    current_node_isoforms = [currentNode.get_longest_isoform()]
-                    neighor_node_isoforms = [neighbor.get_longest_isoform()]
+                if longest_only:
+                    current_node_isoforms = currentNode.get_longest_isoform()
+                    neighor_node_isoforms = neighbor.get_longest_isoform()
                 else:
                     current_node_isoforms = currentNode.protein_isoforms.items()
                     neighor_node_isoforms = neighbor.protein_isoforms.items()
