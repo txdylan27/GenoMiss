@@ -524,7 +524,6 @@ def compare_bitscores(df_fused, df_control):
 
     return df_fused_higher, df_fused_lower
 
-
 def calculate_intron_lengths(df_fused, gff_file):
     """
     Calculate theorized intron length between fused gene pairs from GFF file.
@@ -603,7 +602,6 @@ def calculate_intron_lengths(df_fused, gff_file):
             intron_lengths[(gene_1, gene_2)] = None
 
     return intron_lengths
-
 
 def calculate_scores_for_hits(df_fused, df_control, gff_file=None):
     """
@@ -835,7 +833,11 @@ if __name__ == "__main__":
                         action="store_true")
 
     parser.add_argument('-n', '--organism_name',
-                        help="Scientific name of the organism (e.g., 'Drosophila melanogaster'). Used to filter self-hits from results.",
+                        help="Scientific name of the organism (e.g., 'Drosophila melanogaster')",
+                        type=str,
+                        default=None)
+    parser.add_argument('-d', '--taxon-id',
+                        help="Taxon ID of the organism. Use to filter self-hits during DIAMOND",
                         type=str,
                         default=None)
 
@@ -852,15 +854,18 @@ if __name__ == "__main__":
         print(f"Using provided organism name: {organism_name}")
     else:
         organism_name = detect_organism_name(annotation)
-        if organism_name is None:
-            print("WARNING: Organism name not detected in the annotation file.")
-            if taxon_id:
-                organism_name = f"taxon_{taxon_id}"
-                print(f"Using taxon ID {taxon_id} for filtering instead.")
-            else:
-                print("ERROR: Neither organism name nor taxon ID detected.")
-                print("Please provide organism name with -n flag (e.g., -n 'Drosophila melanogaster')")
-                exit(1)
+    if organism_name is None:
+        print("WARNING: Organism name not detected in the annotation file.")
+        exit(1)
+
+    if taxon_id is None:
+        print("WARNING: Organism name not detected in the annotation file.")
+        if args.taxon_id:
+            taxon_id = args.taxon_id
+        else:
+            print("Please provide organism taxon ID with -n flag (e.g., -n 7010)")
+            exit(1)
+
 
     # Set max target seqs higher to ensure good hits even after taxon filtering
     max_target_seqs = 200
