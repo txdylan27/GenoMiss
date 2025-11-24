@@ -963,7 +963,7 @@ if __name__ == "__main__":
     # Compiling all unique gene alignments to have one dataframe that contains genome-wide results.
     if fused_hits_genome_df_list:
         fused_hits = pd.concat(fused_hits_genome_df_list, ignore_index=True)
-        fused_hits = fused_hits[~fused_hits["subject_title"].str.contains(organism_name, regex=False, na=False)]
+        # Organism filtering is handled by --taxon-exclude during BLAST, no need for post-filtering
 
         # Calculate composite scores for all fused hits
         print("Calculating composite scores for fused gene hits...")
