@@ -5,11 +5,11 @@
 ![GitHub last commit](https://img.shields.io/github/last-commit/txdylan27/GenoMiss)
 ![License](https://img.shields.io/github/license/txdylan27/GenoMiss)
 
-GenoMiss is a computational tool for detecting potential gene misannotations in protein-coding genomes. GenoMiss identifies cases where adjacent genes may actually represent fragments of a single misannotated gene by fusing neighboring genes and comparing their alignment scores against a reference protein database.
+GenoMiss is a computational tool for detecting potential protein-coding gene misannotations in genomes. GenoMiss identifies cases where adjacent genes may actually represent fragments of a single misannotated gene by fusing neighboring genes and comparing their alignment scores against a reference protein database.
 
 ## Overview
 
-Our tool was built to detect gene missanotations in species were intron can be greater than the cutoff value used by most aligners (500-600 KB), but it can also be used to detect misannotations in general. This tool aims to provide a list of potentially missanotated genes without requiring large computational resources. 
+Our tool was built to detect gene missanotations in species were intron sizes can be greater than the cutoff value used by most aligners (500-600 KB), but it can also be used to detect misannotations in general. This tool aims to provide a list of potentially missanotated genes without requiring large computational resources. 
 These genes can then be evaluted in wet-lab or by re-running computationally expensive annotation pipelines such as EGAPX.
 
 
@@ -17,7 +17,7 @@ These genes can then be evaluted in wet-lab or by re-running computationally exp
 
 - **Graph-based genome representation**: Handles overlapping genes and complex genomic architectures using strand-specific acyclic directed graphs
 - **Comprehensive scoring system**: Evaluates fused genes candidates based on query coverage, overlap area, sequence identity, bit score improvement, organism hit count, and e-value significance
-- **Implemented with parallel processing**: Coded to use multiple CPU threads to rapidly generate results, often within ~30 minutes!
+- **Implemented with parallel processing**: Coded to use multiple CPU threads to rapidly generate results in anytime between 5 minutes to an hour, depending on parameters
 - **Flexible filtering**: Customizable thresholds for percent identity, chromosome/contig filtering, and alignment sensitivity
 - **Detailed statistics**: Includes intron length calculations, organism count hits, confidence categorization, etc.
 
@@ -39,7 +39,7 @@ These genes can then be evaluted in wet-lab or by re-running computationally exp
 
 1. **Proteome file** (`.faa`) - FASTA file containing all protein sequences for the organism
 2. **Genome annotation** (`.gff`) - GFF3 format annotation file (RefSeq recommended)
-3. **Reference database** (`.dmnd`) - Pre-built DIAMOND database of reference proteins. It is recommendeded to use a proteome containing organisms from the same class as the species of interest (ergo, Insecta for _Drosophila_ and Mammalia for _Mouse_)
+3. **Reference database** (`.dmnd`) - Pre-built DIAMOND database of reference proteins. It is recommendeded to use a proteome containing organisms from the same class as the species of interest (ergo, Insecta for _Drosophila_ and Mammalia for _Mouse_). Be sure to build the database with taxonomic information, or the program will not be able to filter self-hits properly.
 
 ## Installation
 
@@ -109,7 +109,9 @@ python GenoMiss.py \
 | `-i`, `--identity_cutoff` | 50 | Percent identity cutoff for filtering fused gene alignments (0.0-100.0)  |
 | `-xf`, `--xfilter` | 5 | Minimum number of genes required per chromosome/contig for analysis (filters out small contigs) |
 | `-ds`, `--diamond_sensitivity` | None | DIAMOND sensitivity mode: `fast`, `mid-sensitive`, `sensitive`, `more-sensitive`, `very-sensitive`, or `ultra-sensitive` |
-| `-lo`, `--longest_only` | False | Selects whether all isoforms will be fused to neighboring proteins. If set to True, only the longest isoform is considered |
+| `-lo`, `--longest_only` | False | Selects whether all isoforms will be fused to neighboring proteins. If set to True, only the longest isoform is considered, which considerably shortens the running time of the algorithm. |
+| `-n`, `--organism_name` | None | Used to manually provide the name of the organism if it's not detectable in the .GFF file |
+| `-d`, `--taxon-id` | None | Taxon ID of the organism. Used to filter self-hits during DIAMOND alignment |
 
 ## Output Files
 
@@ -123,7 +125,7 @@ The tool generates multiple output files in the specified output directory:
 | `fused_hits.csv` | CSV | All fused gene hits sorted by composite score with comprehensive metadata |
 | `high_confidence_hits.csv` | CSV | Subset of fused hits with composite score ≥ 70 |
 | `control_hits.csv` | CSV | Alignment results for individual unfused gene parts |
-| `fused_hits.tsv` | TSV | Tab-separated version of all fused hits (terminal-friendly) |
+| `fused_hits.tsv` | TSV | Tab-separated version of all fused hits |
 | `control_hits.tsv` | TSV | Tab-separated version of control hits |
 
 ### Intermediate Files
@@ -148,8 +150,8 @@ The tool uses a composite scoring system (0-100 scale) that combines five compon
 
 ### Score Interpretation
 
-- **High Confidence (≥70)**: Strong evidence of misannotation; fused gene shows substantial improvement
-- **Medium Confidence (40-69)**: Moderate evidence; warrants manual inspection
+- **High Confidence (≥70)**: Strong evidence of misannotation; multiple species show "fused" versions of this gene
+- **Medium Confidence (40-69)**: Moderate evidence; may only be present in a small number of species or lacking alignment quality
 - **Low Confidence (<40)**: Weak evidence; may represent false positives or edge cases
 
 ## How It Works
@@ -172,12 +174,11 @@ The tool uses a composite scoring system (0-100 scale) that combines five compon
 4. **Score Calculation**
    - Calculate composite scores for all fused hits
    - Compute intron lengths from GFF coordinates
-   - Count unique organisms per gene pair
+   - Count unique organisms hits per fused gene
 
 5. **Output Generation**
-   - Reorganize columns for readability
    - Generate summary statistics
-   - Export in multiple formats with professional formatting
+   - Main overview file is "misannotation_results.xlsx"
 
 ## Project Structure
 
@@ -187,7 +188,6 @@ GenoMiss/
 ├── GenomeMap.py                # Genome graph data structures
 ├── scoring.py                  # Composite scoring system
 ├── output_formatter.py         # Multi-format report generation
-├── input_files/                # Example input files (if provided)
 └── README.md                   # This file
 ```
 
@@ -195,9 +195,9 @@ GenoMiss/
 
 - **Chromosome filtering** (`-xf`): Increase threshold to skip small contigs and reduce runtime
 - **Thread count** (`-t`): More threads accelerate DIAMOND but increase memory usage
-- **Sensitivity mode** (`-ds`): Higher sensitivity increases accuracy but significantly increases runtime
-  - `fast`: ~10x faster than default, suitable for large-scale screening
-  - `very-sensitive`: ~10x slower than default, recommended for publication-quality results
+- **Sensitivity mode** (`-ds`): Higher sensitivity increases alignment accuracy but significantly increases runtime
+  - `fast`: ~10x faster than default
+  - `very-sensitive`: ~10x slower than default
 
 ## Citation
 
@@ -209,7 +209,7 @@ If you use this tool in your research, please cite:
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit issues or pull requests.
+This is a unpublished project in active development, we will not accept modifications or contributions until after publication.
 
 ## Authors
 
