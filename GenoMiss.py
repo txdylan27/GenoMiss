@@ -163,37 +163,49 @@ def chromosome_processor_fused_allisoforms(chrom, strand, headNode: GenomeMap.Ge
     return temp_fasta_path, metadata_df
 
 
-def unfused_diamond_alignment(chrom, strand_name, diamond_path, diamond_db, genome_faa_path, num_threads, output_prefix, diamond_sensitivity=None):
+def unfused_diamond_alignment(chrom, strand_name, diamond_path, diamond_db, genome_faa_path, num_threads, output_prefix, diamond_sensitivity=None, taxon_exclude=None, max_target_seqs=100):
     """Function used to get the original alignment scores to use as a comparison with the fused gene alignments."""
 
     diamond_output = f"{output_prefix}/{chrom}_{strand_name}_control_diamond_results.tsv"
     diamond_command = [diamond_path, "blastp", "--db", diamond_db, "--query", genome_faa_path, "--out", diamond_output,
                        "--outfmt", "6", "qseqid", "qlen", "sseqid", "slen", "qstart", "qend", "sstart", "send",
                        "pident", "nident", "mismatch", "evalue", "bitscore", "length", "qcovhsp", "scovhsp", "qtitle", "stitle",
-                       "--header", "--evalue", "1e-5", "--threads", num_threads]
+                       "--header", "--evalue", "1e-5", "--threads", num_threads,
+                       "--max-target-seqs", str(max_target_seqs)]
 
     # Add sensitivity parameter if specified
     if diamond_sensitivity:
         diamond_command.append(diamond_sensitivity)
 
+    # Add taxon exclusion if specified
+    if taxon_exclude:
+        diamond_command.extend(["--taxon-exclude", taxon_exclude])
+
     try:
         result = subprocess.run(diamond_command, check=True, text=True, capture_output=True)
     except subprocess.CalledProcessError as e:
-        print(f"Error during DIAMOND execution for {chrom}, {strand_name} strand.")
-        print(f"DIAMOND stderr: {e.stderr}")
-        print(f"DIAMOND stdout: {e.stdout}")
-        raise
+        # Check if error is due to missing taxonomy info
+        if "taxonomy information" in e.stderr and taxon_exclude:
+            print(f"WARNING: Database lacks taxonomy info. Retrying without --taxon-exclude...")
+            # Remove taxon-exclude and retry
+            diamond_command = [x for x in diamond_command if x != "--taxon-exclude" and x != taxon_exclude]
+            result = subprocess.run(diamond_command, check=True, text=True, capture_output=True)
+        else:
+            print(f"Error during DIAMOND execution for {chrom}, {strand_name} strand.")
+            print(f"DIAMOND stderr: {e.stderr}")
+            print(f"DIAMOND stdout: {e.stdout}")
+            raise
 
-    headers = ["protein", "query_length", "subject_id", "subject_length", "start_of_alignment_in_query", "end_of_alignment_in_query", 
-               "start_of_alignment_in_subject", "end_of_alignment_in_subject", "percentage_of_identical_matches", "number_of_identical_matches", 
-               "number_of_mismatches", "expected_value", "bit_score", "alignment_length", "query_coverage", "subject_coverage", 
+    headers = ["protein", "query_length", "subject_id", "subject_length", "start_of_alignment_in_query", "end_of_alignment_in_query",
+               "start_of_alignment_in_subject", "end_of_alignment_in_subject", "percentage_of_identical_matches", "number_of_identical_matches",
+               "number_of_mismatches", "expected_value", "bit_score", "alignment_length", "query_coverage", "subject_coverage",
                "query_title", "subject_title"]
-    
+
     diamond_df = pd.read_csv(f"{output_prefix}/{chrom}_{strand_name}_control_diamond_results.tsv", sep="\t", skiprows = 3, names = headers)
     return diamond_df
     
     
-def fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_fasta_path, fused_metadata_df, num_threads, ident_cutoff, output_prefix, diamond_sensitivity=None):
+def fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_fasta_path, fused_metadata_df, num_threads, ident_cutoff, output_prefix, diamond_sensitivity=None, taxon_exclude=None, max_target_seqs=100):
     """Function used to fuse neigboring genes and run the DIAMOND protein alignment script on the fused genes. Returns a dataframe containing unique genes that
     fit the user-inputted filtering criteria."""
 
@@ -202,20 +214,32 @@ def fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_fasta_pat
     diamond_command = [diamond_path, "blastp", "--db", db, "--query", temp_fasta_path, "--out", diamond_output,
                        "--outfmt", "6", "qseqid", "qlen", "sseqid", "slen", "qstart", "qend", "sstart", "send",
                        "pident", "nident", "mismatch", "evalue", "bitscore", "length", "qcovhsp", "scovhsp", "qtitle", "stitle",
-                       "--header", "--evalue", "1e-5", "--threads", num_threads]
+                       "--header", "--evalue", "1e-5", "--threads", num_threads,
+                       "--max-target-seqs", str(max_target_seqs)]
 
     # Add sensitivity parameter if specified
     if diamond_sensitivity:
         diamond_command.append(diamond_sensitivity)
 
+    # Add taxon exclusion if specified
+    if taxon_exclude:
+        diamond_command.extend(["--taxon-exclude", taxon_exclude])
+
     # Running the diamond command via subprocess.
     try:
         result = subprocess.run(diamond_command, check=True, text=True, capture_output=True)
     except subprocess.CalledProcessError as e:
-        print(f"Error during DIAMOND execution for {chrom}, {strand_name} strand.")
-        print(f"DIAMOND stderr: {e.stderr}")
-        print(f"DIAMOND stdout: {e.stdout}")
-        raise
+        # Check if error is due to missing taxonomy info
+        if "taxonomy information" in e.stderr and taxon_exclude:
+            print(f"WARNING: Database lacks taxonomy info. Retrying without --taxon-exclude...")
+            # Remove taxon-exclude and retry
+            diamond_command = [x for x in diamond_command if x != "--taxon-exclude" and x != taxon_exclude]
+            result = subprocess.run(diamond_command, check=True, text=True, capture_output=True)
+        else:
+            print(f"Error during DIAMOND execution for {chrom}, {strand_name} strand.")
+            print(f"DIAMOND stderr: {e.stderr}")
+            print(f"DIAMOND stdout: {e.stdout}")
+            raise
 
     # As the diamond headers are very obfuscated, included proper header titles.
     headers = ["fused_protein", "query_length", "subject_id", "subject_length", "start_of_alignment_in_query", "end_of_alignment_in_query", 
@@ -256,6 +280,23 @@ def detect_organism_name(gffFile):
                 return organism_name
     print("Organism name ")
     return None #If organism name is not found, ORGANISM_NAME_DETECTED will remain false
+
+def detect_taxon_id(gffFile):
+    """Detect NCBI taxonomy ID from GFF file ##species header line."""
+    with open(gffFile) as gff:
+        for line in gff:
+            if line.startswith('##species'):
+                # Pattern matches URLs like: https://www.ncbi.nlm.nih.gov/Taxonomy/Browser/wwwtax.cgi?id=7227
+                regex_result = re.search(r'id=(\d+)', line)
+                if regex_result:
+                    taxon_id = regex_result.group(1)
+                    print(f"Detected Taxon ID: {taxon_id}")
+                    return taxon_id
+            # Stop reading after headers
+            if not line.startswith('#'):
+                break
+    print("WARNING: Taxon ID not found in GFF file. Self-hits will not be excluded.")
+    return None
 
 def get_chromosome_names(gffFile):
     # Alternative apporach would be to use pandas to create a dataframe and then use df['seqid'].unique(), but this is
@@ -598,6 +639,9 @@ def calculate_scores_for_hits(df_fused, df_control, gff_file=None):
     # This way different isoforms of the same gene pair count as one
     organism_counts = df_fused.groupby(["gene_1", "gene_2"])["organism"].nunique().to_dict()
 
+    # Get max organism count for normalization
+    max_organism_count = max(organism_counts.values()) if organism_counts else 1
+
     # Step 3: Define scoring function that will be applied to each row
     def calculate_row_score(row):
         # Get control bitscores
@@ -617,6 +661,7 @@ def calculate_scores_for_hits(df_fused, df_control, gff_file=None):
             end_query=row["end_of_alignment_in_query"],
             gene_1_len=row["gene_1_len"],
             organism_hit_count=org_count,
+            max_organism_count=max_organism_count,
             evalue=row["expected_value"],
             percent_identity=row["percentage_of_identical_matches"]
         )
@@ -789,17 +834,36 @@ if __name__ == "__main__":
                         help="Choose whether each isoform or only the longest isoform for each gene is fused. Default is False meaning that each isoform is fused.",
                         action="store_true")
 
+    parser.add_argument('-n', '--organism_name',
+                        help="Scientific name of the organism (e.g., 'Drosophila melanogaster'). Used to filter self-hits from results.",
+                        type=str,
+                        default=None)
+
     args = parser.parse_args()
 
 
 
     annotation = args.organism_annotation
-    organism_name = detect_organism_name(annotation)
+    taxon_id = detect_taxon_id(annotation)
 
-    # TODO: Implement -n parameter
-    if organism_name is None:
-        print("ERROR: Organism name not detected in the annotation file. Please enter it manually.")
-        organism_name = input("Enter the scientific name of your organism: ")
+    # Use command-line organism name if provided, otherwise try to detect
+    if args.organism_name:
+        organism_name = args.organism_name
+        print(f"Using provided organism name: {organism_name}")
+    else:
+        organism_name = detect_organism_name(annotation)
+        if organism_name is None:
+            print("WARNING: Organism name not detected in the annotation file.")
+            if taxon_id:
+                organism_name = f"taxon_{taxon_id}"
+                print(f"Using taxon ID {taxon_id} for filtering instead.")
+            else:
+                print("ERROR: Neither organism name nor taxon ID detected.")
+                print("Please provide organism name with -n flag (e.g., -n 'Drosophila melanogaster')")
+                exit(1)
+
+    # Set max target seqs higher to ensure good hits even after taxon filtering
+    max_target_seqs = 200
 
     diamond_path = shutil.which("diamond")
     if diamond_path is None:
@@ -872,7 +936,7 @@ if __name__ == "__main__":
                     if os.path.getsize(temp_faa_filepath) > 0 and not fused_metadata_df.empty:
                         pbar.set_description(f"Running DIAMOND on {chrom} {strand_name} strand's fused genes")
                         fused_chrom_hits_df, fused_diamond_df = fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_faa_filepath,
-                                                                                fused_metadata_df, num_threads, ident_cutoff, output_prefix, diamond_sensitivity)
+                                                                                fused_metadata_df, num_threads, ident_cutoff, output_prefix, diamond_sensitivity, taxon_id, max_target_seqs)
                         fused_hits_genome_df_list.append(fused_chrom_hits_df)
                         # fused_diamond_df.to_csv(f"{output_prefix}/test_df.csv")
                     else:
@@ -891,7 +955,7 @@ if __name__ == "__main__":
                     
         #The control is to see if the alignment score increases in the fused gene vs the unfused genes for any overlapping hits in the fused genes
         pbar.set_description("Running control DIAMOND on identified gene parts")
-        control_hits = unfused_diamond_alignment(chrom, strand_name, diamond_path, db, genome_faa_path, num_threads, output_prefix, diamond_sensitivity)
+        control_hits = unfused_diamond_alignment(chrom, strand_name, diamond_path, db, genome_faa_path, num_threads, output_prefix, diamond_sensitivity, taxon_id, max_target_seqs)
         pbar.update(1)
 
     

@@ -137,25 +137,27 @@ def calculate_overlap_equilibrium_score(start_query, end_query, gene_1_len):
     return equilibrium_ratio * 100
 
 
-def calculate_organism_count_score(organism_hit_count):
+def calculate_organism_count_score(organism_hit_count, max_organism_count=25):
     """
     Calculate score based on number of different organisms with hits.
 
     Args:
         organism_hit_count (int): Number of different organisms matching this fused gene
+        max_organism_count (int): Maximum organism count in the current run (default: 25)
 
     Returns:
         float: Score from 0-100
 
     Logic:
-        - Linear scaling: 0 organisms → 0 points, 25 organisms → 100 points
-        - Any count ≥25 → capped at 100
+        - Linear scaling: 0 organisms → 0 points, max_organism_count → 100 points
+        - Normalized relative to the maximum organism count in the current run
+        - Any count ≥max_organism_count → capped at 100
     """
     if organism_hit_count <= 0:
         return 0.0
 
-    # Linear scaling up to 25 organisms
-    score = (organism_hit_count / 25) * 100
+    # Linear scaling up to max_organism_count
+    score = (organism_hit_count / max_organism_count) * 100
 
     # Cap at 100
     return round(min(100.0, score), 2)
@@ -218,7 +220,8 @@ def calculate_percent_identity_score(percent_identity):
 
 def calculate_composite_score(query_coverage, fused_bitscore, control_bitscore_1,
                               control_bitscore_2, start_query, end_query,
-                              gene_1_len, organism_hit_count, evalue, percent_identity):
+                              gene_1_len, organism_hit_count, evalue, percent_identity,
+                              max_organism_count=25):
     """
     Calculate the final composite score combining all factors.
 
@@ -233,6 +236,7 @@ def calculate_composite_score(query_coverage, fused_bitscore, control_bitscore_1
         organism_hit_count (int): Number of organisms with hits to this fused gene
         evalue (float): E-value of the alignment
         percent_identity : Percentage of identical matches between subject and query
+        max_organism_count (int): Maximum organism count in the current run (default: 25)
 
     Returns:
         float: Composite score from 0-100
@@ -255,7 +259,7 @@ def calculate_composite_score(query_coverage, fused_bitscore, control_bitscore_1
     equilibrium_score = calculate_overlap_equilibrium_score(
         start_query, end_query, gene_1_len
     )
-    organism_score = calculate_organism_count_score(organism_hit_count)
+    organism_score = calculate_organism_count_score(organism_hit_count, max_organism_count)
     evalue_score = calculate_evalue_score(evalue)
     identity_score = calculate_percent_identity_score(percent_identity)
 
