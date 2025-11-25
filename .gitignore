@@ -1,4 +1,11 @@
 debug_genomemap.py
+analyze_candidates.py
+export_candidates.py
+export_top_candidates.py
+export_top_candidates_full.py
+find_candidates.py
+test_scoring.py
+top_candidates_summary.py
 .idea/
 __pycache__/
 *.gff
