@@ -239,9 +239,187 @@ def auto_adjust_column_widths(worksheet, df):
         worksheet.column_dimensions[column_letter].width = adjusted_width
 
 
+def create_main_workbook(df_fused, stats, scoring_info, output_path):
+    """
+    Create main workbook with fused hits and methodology (no control hits).
+
+    Args:
+        df_fused (pd.DataFrame): Fused hits dataframe
+        stats (dict): Summary statistics
+        scoring_info (dict): Scoring configuration
+        output_path (str): Output file path
+    """
+    wb = Workbook()
+
+    # Remove default sheet
+    if "Sheet" in wb.sheetnames:
+        wb.remove(wb["Sheet"])
+
+    # Sheet 1: Top Hits
+    ws_top = wb.create_sheet("Top Hits")
+    df_top = df_fused[df_fused["composite_score"] >= 70].copy() if len(df_fused) > 0 else pd.DataFrame()
+
+    for r_idx, row in enumerate(dataframe_to_rows(df_top, index=False, header=True), 1):
+        for c_idx, value in enumerate(row, 1):
+            cell = ws_top.cell(row=r_idx, column=c_idx, value=value)
+            if r_idx == 1:
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.alignment = Alignment(horizontal="center")
+
+    if len(df_top) > 0:
+        score_col = 'A'
+        color_scale = ColorScaleRule(
+            start_type='num', start_value=0, start_color='F8696B',
+            mid_type='num', mid_value=50, mid_color='FFEB84',
+            end_type='num', end_value=100, end_color='63BE7B'
+        )
+        ws_top.conditional_formatting.add(f'{score_col}2:{score_col}{len(df_top) + 1}', color_scale)
+
+    auto_adjust_column_widths(ws_top, df_top)
+
+    # Sheet 2: All Fused Hits
+    ws_all = wb.create_sheet("All Fused Hits")
+
+    for r_idx, row in enumerate(dataframe_to_rows(df_fused, index=False, header=True), 1):
+        for c_idx, value in enumerate(row, 1):
+            cell = ws_all.cell(row=r_idx, column=c_idx, value=value)
+            if r_idx == 1:
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.alignment = Alignment(horizontal="center")
+
+    if len(df_fused) > 0:
+        score_col = 'A'
+        color_scale = ColorScaleRule(
+            start_type='num', start_value=0, start_color='F8696B',
+            mid_type='num', mid_value=50, mid_color='FFEB84',
+            end_type='num', end_value=100, end_color='63BE7B'
+        )
+        ws_all.conditional_formatting.add(f'{score_col}2:{score_col}{len(df_fused) + 1}', color_scale)
+
+    auto_adjust_column_widths(ws_all, df_fused)
+
+    # Sheet 3: Scoring Methodology
+    ws_info = wb.create_sheet("Scoring Methodology")
+
+    ws_info.cell(1, 1, "GENE MISANNOTATION DETECTION RESULTS").font = Font(bold=True, size=14)
+    ws_info.cell(3, 1, "ANALYSIS INFORMATION").font = Font(bold=True)
+    ws_info.cell(4, 1, "Organism:")
+    ws_info.cell(4, 2, stats['organism'])
+    ws_info.cell(5, 1, "Analysis Date:")
+    ws_info.cell(5, 2, stats['analysis_date'])
+    ws_info.cell(6, 1, "Total Fused Hits:")
+    ws_info.cell(6, 2, stats['total_fused_hits'])
+    ws_info.cell(7, 1, "Total Control Hits:")
+    ws_info.cell(7, 2, stats['total_control_hits'])
+    ws_info.cell(8, 1, "Overlap Threshold (AA):")
+    ws_info.cell(8, 2, stats['overlap_threshold_aa'])
+
+    if stats['total_fused_hits'] > 0:
+        ws_info.cell(10, 1, "SCORE DISTRIBUTION").font = Font(bold=True)
+        ws_info.cell(11, 1, "High Confidence (≥70):")
+        ws_info.cell(11, 2, stats['high_confidence_hits'])
+        ws_info.cell(12, 1, "Medium Confidence (40-69):")
+        ws_info.cell(12, 2, stats['medium_confidence_hits'])
+        ws_info.cell(13, 1, "Low Confidence (<40):")
+        ws_info.cell(13, 2, stats['low_confidence_hits'])
+        ws_info.cell(15, 1, "Mean Score:")
+        ws_info.cell(15, 2, f"{stats['avg_score']:.2f}")
+        ws_info.cell(16, 1, "Median Score:")
+        ws_info.cell(16, 2, f"{stats['median_score']:.2f}")
+
+    ws_info.cell(18, 1, "SCORING METHODOLOGY").font = Font(bold=True)
+    ws_info.cell(19, 1, "Score Range: 0-100 (higher = more likely true misannotation)")
+
+    row = 21
+    ws_info.cell(row, 1, "Component").font = Font(bold=True)
+    ws_info.cell(row, 2, "Weight").font = Font(bold=True)
+    ws_info.cell(row, 3, "Description").font = Font(bold=True)
+
+    row += 1
+    ws_info.cell(row, 1, "Query Coverage")
+    ws_info.cell(row, 2, scoring_info['weights']['query_coverage'])
+    ws_info.cell(row, 3, scoring_info['descriptions']['query_coverage'])
+
+    row += 1
+    ws_info.cell(row, 1, "Bit Score Improvement")
+    ws_info.cell(row, 2, scoring_info['weights']['bitscore_improvement'])
+    ws_info.cell(row, 3, scoring_info['descriptions']['bitscore_improvement'])
+
+    row += 1
+    ws_info.cell(row, 1, "Overlap Equilibrium")
+    ws_info.cell(row, 2, scoring_info['weights']['overlap_equilibrium'])
+    ws_info.cell(row, 3, scoring_info['descriptions']['overlap_equilibrium'])
+
+    row += 1
+    ws_info.cell(row, 1, "Organism Count")
+    ws_info.cell(row, 2, scoring_info['weights']['organism_count'])
+    ws_info.cell(row, 3, scoring_info['descriptions']['organism_count'])
+
+    row += 1
+    ws_info.cell(row, 1, "E-value")
+    ws_info.cell(row, 2, scoring_info['weights']['evalue'])
+    ws_info.cell(row, 3, scoring_info['descriptions']['evalue'])
+
+    row += 1
+    ws_info.cell(row, 1, "Percent Identity")
+    ws_info.cell(row, 2, scoring_info['weights']['pident'])
+    ws_info.cell(row, 3, scoring_info['descriptions']['pident'])
+
+    ws_info.column_dimensions['A'].width = 25
+    ws_info.column_dimensions['B'].width = 15
+    ws_info.column_dimensions['C'].width = 60
+
+    wb.save(output_path)
+
+
+def create_control_workbook(df_control_chunk, output_path, part_num, total_parts, start_row, end_row):
+    """
+    Create a workbook for a chunk of control hits.
+
+    Args:
+        df_control_chunk (pd.DataFrame): Chunk of control hits
+        output_path (str): Output file path
+        part_num (int): Part number (1-indexed)
+        total_parts (int): Total number of parts
+        start_row (int): Starting row number in original dataset (0-indexed)
+        end_row (int): Ending row number in original dataset (0-indexed)
+    """
+    wb = Workbook()
+
+    # Remove default sheet
+    if "Sheet" in wb.sheetnames:
+        wb.remove(wb["Sheet"])
+
+    # Create control hits sheet (avoid / in sheet name - Excel doesn't allow it)
+    ws = wb.create_sheet(f"Control Hits Part {part_num} of {total_parts}")
+
+    # Add info about the split
+    ws.cell(1, 1, f"Control Hits - Part {part_num} of {total_parts}").font = Font(bold=True, size=12)
+    ws.cell(2, 1, f"Rows {start_row+1:,} to {end_row:,} of original dataset").font = Font(italic=True)
+
+    # Write data starting from row 4
+    for r_idx, row in enumerate(dataframe_to_rows(df_control_chunk, index=False, header=True), 4):
+        for c_idx, value in enumerate(row, 1):
+            cell = ws.cell(row=r_idx, column=c_idx, value=value)
+            if r_idx == 4:  # Header row
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.alignment = Alignment(horizontal="center")
+
+    auto_adjust_column_widths(ws, df_control_chunk)
+
+    wb.save(output_path)
+
+
 def create_excel_workbook(df_fused, df_control, stats, scoring_info, output_path):
     """
     Create Excel workbook with multiple sheets and formatting.
+    If datasets exceed Excel's row limit, splits into multiple workbooks.
 
     Args:
         df_fused (pd.DataFrame): Fused hits dataframe
@@ -254,6 +432,42 @@ def create_excel_workbook(df_fused, df_control, stats, scoring_info, output_path
         print("Skipping Excel output (openpyxl not installed)")
         return
 
+    # Excel row limit (including header)
+    EXCEL_MAX_ROWS = 1048576
+    # Account for: 2 info rows + 1 blank row + 1 header row = 4 rows overhead
+    ROWS_PER_WORKBOOK = EXCEL_MAX_ROWS - 4
+
+    # Check if we need to split control hits into multiple files
+    needs_splitting = len(df_control) > ROWS_PER_WORKBOOK
+
+    if needs_splitting:
+        print(f"Control hits ({len(df_control):,} rows) exceed Excel limit ({EXCEL_MAX_ROWS:,} rows)")
+        print(f"Splitting into multiple workbook files...")
+
+        # Calculate number of workbooks needed for control hits
+        num_control_workbooks = (len(df_control) + ROWS_PER_WORKBOOK - 1) // ROWS_PER_WORKBOOK
+
+        # Create main workbook with fused hits only
+        base_path = output_path.replace('.xlsx', '')
+        main_path = f"{base_path}_main.xlsx"
+        create_main_workbook(df_fused, stats, scoring_info, main_path)
+
+        # Create separate workbooks for control hits chunks
+        for i in range(num_control_workbooks):
+            start_idx = i * ROWS_PER_WORKBOOK
+            end_idx = min((i + 1) * ROWS_PER_WORKBOOK, len(df_control))
+            df_chunk = df_control.iloc[start_idx:end_idx]
+
+            chunk_path = f"{base_path}_control_part{i+1}.xlsx"
+            create_control_workbook(df_chunk, chunk_path, i+1, num_control_workbooks, start_idx, end_idx)
+            print(f"  Created {chunk_path} (rows {start_idx+1:,} to {end_idx:,})")
+
+        print(f"Created {num_control_workbooks + 1} Excel files:")
+        print(f"  - {main_path} (Top Hits, All Fused Hits, Scoring Methodology)")
+        print(f"  - {num_control_workbooks} control hit file(s)")
+        return
+
+    # Original single-workbook creation for smaller datasets
     wb = Workbook()
 
     # Remove default sheet
