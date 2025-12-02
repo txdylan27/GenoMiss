@@ -13,6 +13,14 @@ import output_formatter
 
 # FLAGS AND GLOBAL VARIABLES
 ORGANISM_NAME_DETECTED = False
+DEBUG_CONTROL = True
+tested_genes = set()  # Global set to track fragmented genes being tested (per strand)
+fragmented_df = None  # Global to store fragmented genes report
+debug_dfs_saved = False  # Track if we've saved debug dataframes
+# Cumulative tracking across all strands
+cumulative_tested = set()  # All genes tested across all strands
+cumulative_passed = set()  # All genes that passed filters
+cumulative_filtered = set()  # All genes that were filtered out
     
 """
 Gene types to include in the genome map analysis
@@ -114,7 +122,26 @@ def chromosome_processor_fused_allisoforms(chrom, strand, headNode: GenomeMap.Ge
                 if edge in visited_edges:
                     continue
                 visited_edges.add(edge)
-                
+
+                if DEBUG_CONTROL:
+                    # Check if this is a part1 + part2 fusion from GenoFrag
+                    if fragmented_df is not None:
+                        # Check if currentNode is part1 and neighbor is part2
+                        if currentNode.gene_id.endswith('_part1') and neighbor.gene_id.endswith('_part2'):
+                            # Extract base gene name (remove _part1 suffix)
+                            gene_base = currentNode.gene_id[:-6]  # Remove "_part1"
+                            # Verify neighbor matches
+                            if neighbor.gene_id == f"{gene_base}_part2":
+                                tested_genes.add(gene_base)
+                                # Check if both nodes have protein isoforms
+                                part1_protein_count = len(currentNode.protein_isoforms)
+                                part2_protein_count = len(neighbor.protein_isoforms)
+                                if part1_protein_count == 0 or part2_protein_count == 0:
+                                    print(f"    ⚠ Gene {gene_base}: part1 has {part1_protein_count} proteins, part2 has {part2_protein_count} proteins")
+                                    if part1_protein_count == 0:
+                                        print(f"      Part1 gene_id: {currentNode.gene_id}")
+                                    if part2_protein_count == 0:
+                                        print(f"      Part2 gene_id: {neighbor.gene_id}")
                 # Handling of longest isoform mode
                 if longest_only:
                     current_node_isoforms = currentNode.get_longest_isoform()
@@ -250,9 +277,92 @@ def fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_fasta_pat
     # Converting the .tsv provided by diamond to a dataframe while skipping useless rows (the first 3) and renaming the headers.
     diamond_df = pd.read_csv(f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv", sep="\t", skiprows = 3, names = headers)
 
-    # Merging the diamond results dataframe with the fused protein dataframe. Had to use a weird gimmicky solution I found to keep the original order preserved.
-    fused_diamond_df = fused_metadata_df.merge(fused_metadata_df.merge(diamond_df, how='outer', on='fused_protein', sort=False))
-    
+    if DEBUG_CONTROL:
+        # Check if tested genes exist in diamond_df BEFORE merge
+        if tested_genes:
+            # Get all fused_protein IDs that correspond to tested genes
+            expected_fused_ids = set()
+            for _, row in fused_metadata_df.iterrows():
+                if pd.notna(row.get('gene_1')) and pd.notna(row.get('gene_2')):
+                    if row['gene_1'].endswith('_part1') and row['gene_2'].endswith('_part2'):
+                        gene_base = row['gene_1'][:-6]
+                        if row['gene_2'] == f"{gene_base}_part2" and gene_base in tested_genes:
+                            expected_fused_ids.add(row['fused_protein'])
+
+            # Check which ones are in diamond_df
+            diamond_fused_ids = set(diamond_df['fused_protein'])
+            found_in_diamond = expected_fused_ids & diamond_fused_ids
+            missing_from_diamond = expected_fused_ids - diamond_fused_ids
+
+            if missing_from_diamond:
+                print(f"  ⚠ BEFORE MERGE: {len(missing_from_diamond)}/{len(expected_fused_ids)} tested gene fusions MISSING from DIAMOND results!")
+                print(f"    (DIAMOND never returned hits for these)")
+                # Extract gene names for readability
+                missing_genes = set()
+                for fused_id in list(missing_from_diamond)[:5]:
+                    for _, row in fused_metadata_df.iterrows():
+                        if row['fused_protein'] == fused_id:
+                            missing_genes.add(row['gene_1'][:-6])
+                            break
+                print(f"    Example genes: {list(missing_genes)}")
+            else:
+                print(f"  ✓ BEFORE MERGE: All {len(expected_fused_ids)} tested gene fusions found in DIAMOND results")
+
+    if DEBUG_CONTROL:
+        print(f"  DEBUG: fused_metadata_df shape: {fused_metadata_df.shape}")
+        print(f"  DEBUG: diamond_df shape: {diamond_df.shape}")
+        print(f"  DEBUG: Unique fused_proteins in metadata: {fused_metadata_df['fused_protein'].nunique()}")
+        print(f"  DEBUG: Unique fused_proteins in diamond: {diamond_df['fused_protein'].nunique()}")
+        # Check for exact string matches
+        metadata_ids = set(fused_metadata_df['fused_protein'])
+        diamond_ids = set(diamond_df['fused_protein'])
+        print(f"  DEBUG: Overlap in fused_protein IDs: {len(metadata_ids & diamond_ids)}/{len(metadata_ids)}")
+
+    # Merging the diamond results dataframe with the fused protein dataframe. Left join keeps all fusions.
+    fused_diamond_df = fused_metadata_df.merge(diamond_df, how='left', on='fused_protein', sort=False)
+
+    if DEBUG_CONTROL:
+        print(f"  DEBUG: fused_diamond_df shape AFTER merge: {fused_diamond_df.shape}")
+        print(f"  DEBUG: fused_diamond_df columns: {list(fused_diamond_df.columns)}")
+        # Check if gene_1 column exists and is correct
+        if 'gene_1' in fused_diamond_df.columns:
+            print(f"  DEBUG: gene_1 column exists, non-null count: {fused_diamond_df['gene_1'].notna().sum()}")
+        else:
+            print(f"  DEBUG: WARNING - gene_1 column NOT FOUND! Available columns: {list(fused_diamond_df.columns)}")
+
+        # Save debug dataframes for first strand only
+        global debug_dfs_saved
+        if not debug_dfs_saved:
+            print(f"  DEBUG: Saving dataframes for analysis...")
+            fused_metadata_df.to_csv(f"{output_prefix}/debug_fused_metadata.csv", index=False)
+            diamond_df.to_csv(f"{output_prefix}/debug_diamond.csv", index=False)
+            fused_diamond_df.to_csv(f"{output_prefix}/debug_fused_diamond.csv", index=False)
+            # Also save the tested_genes set
+            import json
+            with open(f"{output_prefix}/debug_tested_genes.json", 'w') as f:
+                json.dump(list(tested_genes), f, indent=2)
+            print(f"  DEBUG: Saved to {output_prefix}/")
+            debug_dfs_saved = True
+
+    if DEBUG_CONTROL:
+        # Check if tested genes made it to DIAMOND results
+        if tested_genes:
+            # Extract gene pairs from fused_diamond_df
+            fused_genes_found = set()
+            for _, row in fused_diamond_df.iterrows():
+                if pd.notna(row.get('gene_1')) and pd.notna(row.get('gene_2')):
+                    if row['gene_1'].endswith('_part1') and row['gene_2'].endswith('_part2'):
+                        gene_base = row['gene_1'][:-6]
+                        if row['gene_2'] == f"{gene_base}_part2":
+                            fused_genes_found.add(gene_base)
+
+            missing_from_diamond = tested_genes - fused_genes_found
+            if missing_from_diamond:
+                print(f"  WARNING: {len(missing_from_diamond)} tested genes missing from fused_diamond_df!")
+                print(f"  Examples: {list(missing_from_diamond)[:5]}")
+            else:
+                print(f"  ✓ All {len(tested_genes)} tested genes found in fused_diamond_df")
+
     # Only filtering for fused genes that have overlaps with at least 10 AAs, maybe make this user-inputted
     fused_hits_df = fused_diamond_df[
         (fused_diamond_df["start_of_alignment_in_query"] < (fused_diamond_df["gene_1_len"]-10)) &
@@ -261,6 +371,30 @@ def fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_fasta_pat
         (fused_diamond_df["percentage_of_identical_matches"] >= 50) &
         (~fused_diamond_df["subject_title"].str.contains("uncharacterized", case=False, na=False))
     ].copy()
+    
+    if DEBUG_CONTROL:
+        # Check if tested genes survived filtering
+        if tested_genes:
+            # Extract genes from fused_hits_df
+            passed_filter = set()
+            for _, row in fused_hits_df.iterrows():
+                if pd.notna(row.get('gene_1')) and pd.notna(row.get('gene_2')):
+                    if row['gene_1'].endswith('_part1') and row['gene_2'].endswith('_part2'):
+                        gene_base = row['gene_1'][:-6]
+                        if row['gene_2'] == f"{gene_base}_part2":
+                            passed_filter.add(gene_base)
+
+            filtered_out = tested_genes - passed_filter
+
+            # Update cumulative tracking
+            cumulative_passed.update(passed_filter)
+            cumulative_filtered.update(filtered_out)
+
+            if filtered_out:
+                print(f"  ⚠ {len(filtered_out)}/{len(tested_genes)} tested genes FILTERED OUT!")
+                print(f"  Examples: {list(filtered_out)[:5]}")
+            else:
+                print(f"  ✓ All {len(tested_genes)} tested genes PASSED filters")
     
     
     os.remove(temp_fasta_path)
@@ -439,7 +573,7 @@ def build_genomemap(organismName, proteomeFile, gffFile, minGenePerX):
     candidates to other genes
     """
     chromosomes = genecount_filtered_chromosomes(gffFile, minGenePerX)
-    print(f"Chromsomes/contigs that met the minimum gene count threshold of {min_geneperx_threshold}:\n{chr(10).join(sorted(chromosomes))}")
+    print(f"Chromsomes/contigs that met the minimum gene count threshold of {minGenePerX}:\n{chr(10).join(sorted(chromosomes))}")
     proteins = process_faa(proteomeFile)
     theMap = GenomeMap.GenomeMap(organismName)
     with open(gffFile) as gff:
@@ -910,6 +1044,69 @@ if __name__ == "__main__":
     fused_hits_genome_df_list = []
 
     genomeMap = build_genomemap(organism_name, proteome_file, gff_file, min_geneperx_threshold)
+    if DEBUG_CONTROL:
+        # Clear debug tracking variables from any previous runs
+        tested_genes.clear()
+        cumulative_tested.clear()
+        cumulative_passed.clear()
+        cumulative_filtered.clear()
+        filtered_genes = set()
+        GENOFRAG_DIR = '/home/davidbellini/OneDrive/gabbiani/TOOLS/GenoFrag/outputs/simulans_new'
+        FRAGMENTED_GFF = os.path.join(GENOFRAG_DIR, 'test_simulans_10pct.gff')
+        FRAGMENTED_FAA = os.path.join(GENOFRAG_DIR, 'test_simulans_10pct.faa')
+        FRAGMENTED_REPORT = os.path.join(GENOFRAG_DIR, 'test_simulans_10pct_report.csv')
+        fragmented_df = pd.read_csv(FRAGMENTED_REPORT)
+        all_genes_in_map = set()
+        for chrom, strands in genomeMap.chromosomes.items():
+            for strand_name, head_node in strands.items():
+                current = head_node
+                while current:
+                    all_genes_in_map.add(current.gene_id)
+                    current = current.neighbors[0] if current.neighbors else None
+
+        # Check neighbor relationships
+        correct = 0
+        broken = 0
+        missing = 0
+
+        for idx, row in fragmented_df.iterrows():
+            gene_id = row['gene_name']
+            part1_gene = f"{gene_id}_part1"
+            part2_gene = f"{gene_id}_part2"
+
+            # Check if parts exist in map
+            if part1_gene not in all_genes_in_map or part2_gene not in all_genes_in_map:
+                missing += 1
+                filtered_genes.add(gene_id)
+                continue
+
+            # Find part1 node and check if part2 is its neighbor
+            found_correct_neighbor = False
+            for chrom, strands in genomeMap.chromosomes.items():
+                for strand_name, head_node in strands.items():
+                    current = head_node
+                    while current:
+                        if current.gene_id == part1_gene:
+                            if current.neighbors:
+                                neighbor_ids = [n.gene_id for n in current.neighbors]
+                                if part2_gene in neighbor_ids:
+                                    found_correct_neighbor = True
+                            break
+                        current = current.neighbors[0] if current.neighbors else None
+                if found_correct_neighbor:
+                    break
+
+            if found_correct_neighbor:
+                correct += 1
+            else:
+                broken += 1
+                filtered_genes.add(gene_id)
+
+        print(f"\ngenoMap relationships:")
+        print(f"  Correct: {correct} ({100 * correct / len(fragmented_df):.1f}%)")
+        print(f"  Broken: {broken} ({100 * broken / len(fragmented_df):.1f}%)")
+        print(f"  Missing from map: {missing} ({100 * missing / len(fragmented_df):.1f}%)")
+        print(f"1st FILTER LOST {len(filtered_genes)} genes")
 
     # Initializing a progress bar for tracking the program's status.
     total_steps = (len(genomeMap.chromosomes.keys()) * 4) + 1 
@@ -950,7 +1147,13 @@ if __name__ == "__main__":
                         if os.path.exists(temp_faa_filepath):
                             os.remove(temp_faa_filepath)
                     pbar.update(1)
-                    
+
+                    if DEBUG_CONTROL:
+                        if tested_genes:
+                            print(f"  {chrom} {strand_name}: Tested {len(tested_genes)} fragmented genes this strand")
+                            cumulative_tested.update(tested_genes)
+                        tested_genes.clear()  # Reset for next strand
+
                     # Process unfused proteins second
                     temp_faa_filepath = chromosome_processor_unfused_allisoforms(chrom, strand, headNode, output_prefix, fused_chrom_hits_df, longest_only)
                     if os.path.exists(temp_faa_filepath) and os.path.getsize(temp_faa_filepath) > 0:
@@ -991,5 +1194,20 @@ if __name__ == "__main__":
         # Create empty results file with proper headers
         pd.DataFrame(columns=["fused_gene", "fused_product", "fused_gene_len", "gene_1", "product_1",
                               "gene_1_len", "gene_2", "product_2", "gene_2_len"]).to_csv(f"{output_folder}/full_statistics_genome_results.csv")
+
+    if DEBUG_CONTROL:
+        print("\nCUMULATIVE DEBUG SUMMARY:")
+        print(f"Total fragmented genes tested: {len(cumulative_tested)}")
+        print(f"Genes that PASSED all filters: {len(cumulative_passed)} ({100*len(cumulative_passed)/len(cumulative_tested) if cumulative_tested else 0:.1f}%)")
+        print(f"Genes that were FILTERED OUT: {len(cumulative_filtered)} ({100*len(cumulative_filtered)/len(cumulative_tested) if cumulative_tested else 0:.1f}%)")
+        if cumulative_filtered:
+            print(f"Example filtered genes: {list(cumulative_filtered)[:10]}")
+        if fragmented_df is not None:
+            total_fragmented = fragmented_df['gene_name'].nunique()
+            print(f"Total genes in GenoFrag report: {total_fragmented}")
+            print(f"Genes in tested set: {len(cumulative_tested)} ({100*len(cumulative_tested)/total_fragmented:.1f}%)")
+            not_tested = total_fragmented - len(cumulative_tested)
+            if not_tested > 0:
+                print(f"⚠ Genes NOT tested (filtered earlier): {not_tested}")
 
     print("Your results are ready.")
