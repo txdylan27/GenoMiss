@@ -250,8 +250,8 @@ def fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_fasta_pat
     # Converting the .tsv provided by diamond to a dataframe while skipping useless rows (the first 3) and renaming the headers.
     diamond_df = pd.read_csv(f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv", sep="\t", skiprows = 3, names = headers)
 
-    # Merging the diamond results dataframe with the fused protein dataframe. Had to use a weird gimmicky solution I found to keep the original order preserved.
-    fused_diamond_df = fused_metadata_df.merge(fused_metadata_df.merge(diamond_df, how='outer', on='fused_protein', sort=False))
+    # Merging the diamond results dataframe with the fused protein dataframe. Left join keeps all fusions.
+    fused_diamond_df = fused_metadata_df.merge(diamond_df, how='left', on='fused_protein', sort=False)
     
     # Only filtering for fused genes that have overlaps with at least 10 AAs, maybe make this user-inputted
     fused_hits_df = fused_diamond_df[
