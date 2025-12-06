@@ -9,7 +9,7 @@ GenoMiss is a computational tool for detecting potential protein-coding gene mis
 
 ## Overview
 
-Our tool was built to detect gene missanotations in species were intron sizes can be greater than the cutoff value used by most aligners (500-600 KB), but it can also be used to detect misannotations in general. This tool aims to provide a list of potentially missanotated genes without requiring large computational resources. 
+Our tool was built to detect gene missanotations in species where intron sizes can be greater than the cutoff value used by most aligners (500-600 KB), but it can also be used to detect misannotations in general. This tool aims to provide a list of potentially missanotated genes without requiring large computational resources. 
 These genes can then be evaluted in wet-lab or by re-running computationally expensive annotation pipelines such as EGAPX.
 
 
