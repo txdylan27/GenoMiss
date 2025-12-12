@@ -13,14 +13,24 @@ import output_formatter
 
 # FLAGS AND GLOBAL VARIABLES
 ORGANISM_NAME_DETECTED = False
-DEBUG_CONTROL = True
+DEBUG_CONTROL = False
 tested_genes = set()  # Global set to track fragmented genes being tested (per strand)
 fragmented_df = None  # Global to store fragmented genes report
-debug_dfs_saved = False  # Track if we've saved debug dataframes
-# Cumulative tracking across all strands
-cumulative_tested = set()  # All genes tested across all strands
-cumulative_passed = set()  # All genes that passed filters
-cumulative_filtered = set()  # All genes that were filtered out
+best_diamond_hits = {}  # Global dictionary to store best DIAMOND hit per gene
+
+# Tracking structure for control gene losses
+control_losses = {
+    'missing_from_map': set(),
+    'broken_neighbors': set(),
+    'missing_proteins': set(),
+    'no_diamond_hits': set(),
+    'failed_alignment_overlap': set(),
+    'failed_query_coverage': set(),
+    'failed_percent_identity': set(),
+    'failed_uncharacterized': set(),
+    'passed_all_filters': set(),
+    'not_tested': set()
+}
     
 """
 Gene types to include in the genome map analysis
@@ -53,9 +63,9 @@ def chromosome_processor_unfused_allisoforms(chrom, strand, headNode: GenomeMap.
     Handles branching paths from overlapping genes and convergence points.
     """
     tempFAAstring = ""
-    visited = set()  # Track visited gene_ids to avoid duplicates when paths converge
+    visited = set()  # Track visited GeneNode objects to avoid duplicates when paths converge
     queue = [headNode]  # Initialize queue with head node (BFS uses FIFO)
-    
+
     # Creating sets of product_1 and product_2 to only write out fused gene parts to the faa
     product1_set = set(fused_chrom_hits_df['product_1'])
     product2_set = set(fused_chrom_hits_df['product_2'])
@@ -63,10 +73,10 @@ def chromosome_processor_unfused_allisoforms(chrom, strand, headNode: GenomeMap.
     while queue:
         currentNode = queue.pop(0)  # Dequeue: pop from front (BFS: process level-by-level)
 
-        # Skip if we've already processed this gene (handles convergence)
-        if currentNode.gene_id in visited:
+        # Skip if we've already processed this node (handles convergence and duplicate gene names)
+        if currentNode in visited:
             continue
-        visited.add(currentNode.gene_id)
+        visited.add(currentNode)
 
         # Handling of longest isoform mode
         if longest_only:
@@ -100,17 +110,17 @@ def chromosome_processor_fused_allisoforms(chrom, strand, headNode: GenomeMap.Ge
     """
     tempFAAstring = ""
     fused_metadata = []  # Store metadata for each fusion
-    visited_nodes = set()  # Track visited nodes for graph traversal
+    visited_nodes = set()  # Track visited GeneNode objects for graph traversal
     visited_edges = set()  # Track processed edges to avoid duplicate fusions
     queue = [headNode]
 
     while queue:
         currentNode = queue.pop(0)  # BFS: pop from front
 
-        # Skip if we've already visited this node
-        if currentNode.gene_id in visited_nodes:
+        # Skip if we've already visited this node (handles convergence and duplicate gene names)
+        if currentNode in visited_nodes:
             continue
-        visited_nodes.add(currentNode.gene_id)
+        visited_nodes.add(currentNode)
 
         # Create fusions with all neighbors
         if currentNode.neighbors:
@@ -137,11 +147,7 @@ def chromosome_processor_fused_allisoforms(chrom, strand, headNode: GenomeMap.Ge
                                 part1_protein_count = len(currentNode.protein_isoforms)
                                 part2_protein_count = len(neighbor.protein_isoforms)
                                 if part1_protein_count == 0 or part2_protein_count == 0:
-                                    print(f"    ⚠ Gene {gene_base}: part1 has {part1_protein_count} proteins, part2 has {part2_protein_count} proteins")
-                                    if part1_protein_count == 0:
-                                        print(f"      Part1 gene_id: {currentNode.gene_id}")
-                                    if part2_protein_count == 0:
-                                        print(f"      Part2 gene_id: {neighbor.gene_id}")
+                                    control_losses['missing_proteins'].add(gene_base)
                 # Handling of longest isoform mode
                 if longest_only:
                     current_node_isoforms = currentNode.get_longest_isoform()
@@ -277,91 +283,93 @@ def fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_fasta_pat
     # Converting the .tsv provided by diamond to a dataframe while skipping useless rows (the first 3) and renaming the headers.
     diamond_df = pd.read_csv(f"{output_prefix}/{chrom}_{strand_name}_diamond_results.tsv", sep="\t", skiprows = 3, names = headers)
 
-    if DEBUG_CONTROL:
-        # Check if tested genes exist in diamond_df BEFORE merge
-        if tested_genes:
-            # Get all fused_protein IDs that correspond to tested genes
-            expected_fused_ids = set()
-            for _, row in fused_metadata_df.iterrows():
-                if pd.notna(row.get('gene_1')) and pd.notna(row.get('gene_2')):
-                    if row['gene_1'].endswith('_part1') and row['gene_2'].endswith('_part2'):
-                        gene_base = row['gene_1'][:-6]
-                        if row['gene_2'] == f"{gene_base}_part2" and gene_base in tested_genes:
-                            expected_fused_ids.add(row['fused_protein'])
+    if DEBUG_CONTROL and tested_genes:
+        # Get expected fusions
+        expected_fused_ids = set()
+        for _, row in fused_metadata_df.iterrows():
+            if pd.notna(row.get('gene_1')) and pd.notna(row.get('gene_2')):
+                if row['gene_1'].endswith('_part1') and row['gene_2'].endswith('_part2'):
+                    gene_base = row['gene_1'][:-6]
+                    if row['gene_2'] == f"{gene_base}_part2" and gene_base in tested_genes:
+                        expected_fused_ids.add((gene_base, row['fused_protein']))
 
-            # Check which ones are in diamond_df
-            diamond_fused_ids = set(diamond_df['fused_protein'])
-            found_in_diamond = expected_fused_ids & diamond_fused_ids
-            missing_from_diamond = expected_fused_ids - diamond_fused_ids
-
-            if missing_from_diamond:
-                print(f"  ⚠ BEFORE MERGE: {len(missing_from_diamond)}/{len(expected_fused_ids)} tested gene fusions MISSING from DIAMOND results!")
-                print(f"    (DIAMOND never returned hits for these)")
-                # Extract gene names for readability
-                missing_genes = set()
-                for fused_id in list(missing_from_diamond)[:5]:
-                    for _, row in fused_metadata_df.iterrows():
-                        if row['fused_protein'] == fused_id:
-                            missing_genes.add(row['gene_1'][:-6])
-                            break
-                print(f"    Example genes: {list(missing_genes)}")
-            else:
-                print(f"  ✓ BEFORE MERGE: All {len(expected_fused_ids)} tested gene fusions found in DIAMOND results")
-
-    if DEBUG_CONTROL:
-        print(f"  DEBUG: fused_metadata_df shape: {fused_metadata_df.shape}")
-        print(f"  DEBUG: diamond_df shape: {diamond_df.shape}")
-        print(f"  DEBUG: Unique fused_proteins in metadata: {fused_metadata_df['fused_protein'].nunique()}")
-        print(f"  DEBUG: Unique fused_proteins in diamond: {diamond_df['fused_protein'].nunique()}")
-        # Check for exact string matches
-        metadata_ids = set(fused_metadata_df['fused_protein'])
-        diamond_ids = set(diamond_df['fused_protein'])
-        print(f"  DEBUG: Overlap in fused_protein IDs: {len(metadata_ids & diamond_ids)}/{len(metadata_ids)}")
+        # Check which are missing from DIAMOND
+        diamond_fused_ids = set(diamond_df['fused_protein'])
+        for gene_base, fused_id in expected_fused_ids:
+            if fused_id not in diamond_fused_ids:
+                control_losses['no_diamond_hits'].add(gene_base)
 
     # Merging the diamond results dataframe with the fused protein dataframe. Left join keeps all fusions.
     fused_diamond_df = fused_metadata_df.merge(diamond_df, how='left', on='fused_protein', sort=False)
 
-    if DEBUG_CONTROL:
-        print(f"  DEBUG: fused_diamond_df shape AFTER merge: {fused_diamond_df.shape}")
-        print(f"  DEBUG: fused_diamond_df columns: {list(fused_diamond_df.columns)}")
-        # Check if gene_1 column exists and is correct
-        if 'gene_1' in fused_diamond_df.columns:
-            print(f"  DEBUG: gene_1 column exists, non-null count: {fused_diamond_df['gene_1'].notna().sum()}")
-        else:
-            print(f"  DEBUG: WARNING - gene_1 column NOT FOUND! Available columns: {list(fused_diamond_df.columns)}")
+    # Track best DIAMOND hit for each gene for diagnostic reporting
+    if DEBUG_CONTROL and tested_genes:
+        # Get all rows for tested genes
+        mask = (
+            fused_diamond_df['gene_1'].str.endswith('_part1', na=False) &
+            fused_diamond_df['gene_2'].str.endswith('_part2', na=False)
+        )
+        tested_rows = fused_diamond_df[mask].copy()
+        tested_rows['gene_base'] = tested_rows['gene_1'].str[:-6]
+        tested_rows = tested_rows[tested_rows['gene_base'].isin(tested_genes)]
 
-        # Save debug dataframes for first strand only
-        global debug_dfs_saved
-        if not debug_dfs_saved:
-            print(f"  DEBUG: Saving dataframes for analysis...")
-            fused_metadata_df.to_csv(f"{output_prefix}/debug_fused_metadata.csv", index=False)
-            diamond_df.to_csv(f"{output_prefix}/debug_diamond.csv", index=False)
-            fused_diamond_df.to_csv(f"{output_prefix}/debug_fused_diamond.csv", index=False)
-            # Also save the tested_genes set
-            import json
-            with open(f"{output_prefix}/debug_tested_genes.json", 'w') as f:
-                json.dump(list(tested_genes), f, indent=2)
-            print(f"  DEBUG: Saved to {output_prefix}/")
-            debug_dfs_saved = True
+        # For each tested gene, find its best hit (highest bitscore) and calculate diagnostics
+        if not tested_rows.empty:
+            for gene in tested_genes:
+                gene_rows = tested_rows[tested_rows['gene_base'] == gene]
+                if not gene_rows.empty:
+                    # Filter out NaN bitscores
+                    gene_rows_valid = gene_rows[gene_rows['bit_score'].notna()]
+                    if not gene_rows_valid.empty:
+                        # Get row with highest bitscore
+                        best_hit_idx = gene_rows_valid['bit_score'].idxmax()
+                        best_hit_row = gene_rows_valid.loc[best_hit_idx]
 
-    if DEBUG_CONTROL:
-        # Check if tested genes made it to DIAMOND results
-        if tested_genes:
-            # Extract gene pairs from fused_diamond_df
-            fused_genes_found = set()
-            for _, row in fused_diamond_df.iterrows():
-                if pd.notna(row.get('gene_1')) and pd.notna(row.get('gene_2')):
-                    if row['gene_1'].endswith('_part1') and row['gene_2'].endswith('_part2'):
-                        gene_base = row['gene_1'][:-6]
-                        if row['gene_2'] == f"{gene_base}_part2":
-                            fused_genes_found.add(gene_base)
+                        # Calculate detailed alignment overlap diagnostics
+                        gene_1_len = best_hit_row['gene_1_len']
+                        align_start = best_hit_row['start_of_alignment_in_query']
+                        align_end = best_hit_row['end_of_alignment_in_query']
 
-            missing_from_diamond = tested_genes - fused_genes_found
-            if missing_from_diamond:
-                print(f"  WARNING: {len(missing_from_diamond)} tested genes missing from fused_diamond_df!")
-                print(f"  Examples: {list(missing_from_diamond)[:5]}")
-            else:
-                print(f"  ✓ All {len(tested_genes)} tested genes found in fused_diamond_df")
+                        # Check overlap on both sides of the boundary
+                        part1_overlap = gene_1_len - align_start  # How far into part1 from the end
+                        part2_overlap = align_end - gene_1_len     # How far into part2 from the start
+
+                        # Determine overlap status
+                        if align_start < (gene_1_len - 10) and align_end > (gene_1_len + 10):
+                            overlap_status = "PASS: >=10 AA on both sides"
+                        elif align_start >= gene_1_len:
+                            overlap_status = f"FAIL: No part1 coverage (alignment starts at {align_start}, part1 ends at {gene_1_len})"
+                        elif align_end <= gene_1_len:
+                            overlap_status = f"FAIL: No part2 coverage (alignment ends at {align_end}, part2 starts at {gene_1_len})"
+                        else:
+                            # Has some overlap but not enough
+                            part1_depth = max(0, gene_1_len - align_start)
+                            part2_depth = max(0, align_end - gene_1_len)
+                            if part1_depth < 10:
+                                overlap_status = f"FAIL: Part1 overlap only {part1_depth} AA (need 10)"
+                            elif part2_depth < 10:
+                                overlap_status = f"FAIL: Part2 overlap only {part2_depth} AA (need 10)"
+                            else:
+                                overlap_status = f"PASS: Part1={part1_depth} AA, Part2={part2_depth} AA"
+
+                        # Store comprehensive hit information
+                        best_diamond_hits[gene] = {
+                            'fused_protein': best_hit_row['fused_protein'],
+                            'subject_id': best_hit_row['subject_id'],
+                            'subject_title': best_hit_row.get('subject_title', ''),
+                            'bitscore': best_hit_row['bit_score'],
+                            'qcoverage': best_hit_row['query_coverage'],
+                            'pident': best_hit_row['percentage_of_identical_matches'],
+                            'evalue': best_hit_row['expected_value'],
+                            'alignment_start': align_start,
+                            'alignment_end': align_end,
+                            'gene_1_len': gene_1_len,
+                            'gene_2_len': best_hit_row['gene_2_len'],
+                            'fused_gene_len': best_hit_row['fused_gene_len'],
+                            'overlap_status': overlap_status,
+                            'part1_overlap_depth': max(0, gene_1_len - align_start),
+                            'part2_overlap_depth': max(0, align_end - gene_1_len)
+                        }
 
     # Only filtering for fused genes that have overlaps with at least 10 AAs, maybe make this user-inputted
     fused_hits_df = fused_diamond_df[
@@ -371,30 +379,68 @@ def fused_diamond_alignment(chrom, strand_name, diamond_path, db, temp_fasta_pat
         (fused_diamond_df["percentage_of_identical_matches"] >= 50) &
         (~fused_diamond_df["subject_title"].str.contains("uncharacterized", case=False, na=False))
     ].copy()
-    
-    if DEBUG_CONTROL:
-        # Check if tested genes survived filtering
-        if tested_genes:
-            # Extract genes from fused_hits_df
-            passed_filter = set()
-            for _, row in fused_hits_df.iterrows():
-                if pd.notna(row.get('gene_1')) and pd.notna(row.get('gene_2')):
-                    if row['gene_1'].endswith('_part1') and row['gene_2'].endswith('_part2'):
-                        gene_base = row['gene_1'][:-6]
-                        if row['gene_2'] == f"{gene_base}_part2":
-                            passed_filter.add(gene_base)
 
-            filtered_out = tested_genes - passed_filter
+    # Track which genes were COMPLETELY filtered out and WHY
+    if DEBUG_CONTROL and tested_genes:
+        # Step 1: Identify genes that passed (have at least one hit in fused_hits_df)
+        mask = (
+            fused_hits_df['gene_1'].str.endswith('_part1', na=False) &
+            fused_hits_df['gene_2'].str.endswith('_part2', na=False)
+        )
+        passed_rows = fused_hits_df[mask]
 
-            # Update cumulative tracking
-            cumulative_passed.update(passed_filter)
-            cumulative_filtered.update(filtered_out)
+        passed_genes = set()
+        if not passed_rows.empty:
+            gene_bases = passed_rows['gene_1'].str[:-6]
+            passed_genes = set(gene_bases[gene_bases.isin(tested_genes)])
 
-            if filtered_out:
-                print(f"  ⚠ {len(filtered_out)}/{len(tested_genes)} tested genes FILTERED OUT!")
-                print(f"  Examples: {list(filtered_out)[:5]}")
-            else:
-                print(f"  ✓ All {len(tested_genes)} tested genes PASSED filters")
+        control_losses['passed_all_filters'].update(passed_genes)
+
+        # Step 2: Identify genes that were completely filtered out
+        filtered_out_genes = tested_genes - passed_genes
+
+        # Step 3: For completely filtered-out genes, determine which filters blocked them
+        if filtered_out_genes:
+            # Get all rows for tested genes from fused_diamond_df
+            mask = (
+                fused_diamond_df['gene_1'].str.endswith('_part1', na=False) &
+                fused_diamond_df['gene_2'].str.endswith('_part2', na=False)
+            )
+            tested_rows = fused_diamond_df[mask].copy()
+            tested_rows['gene_base'] = tested_rows['gene_1'].str[:-6]
+            tested_rows = tested_rows[tested_rows['gene_base'].isin(filtered_out_genes)]
+
+            if not tested_rows.empty:
+                # For each filtered-out gene, check which filters blocked ALL its hits
+                for gene in filtered_out_genes:
+                    gene_rows = tested_rows[tested_rows['gene_base'] == gene]
+
+                    if not gene_rows.empty:
+                        # Check if ALL hits failed each filter criterion
+                        # A gene is counted as failed_X if ALL its hits failed filter X
+
+                        # Filter 1: Alignment overlap
+                        passes_overlap = (
+                            (gene_rows["start_of_alignment_in_query"] < (gene_rows["gene_1_len"]-10)) &
+                            (gene_rows["end_of_alignment_in_query"] > (gene_rows["gene_1_len"]+10))
+                        )
+                        if not passes_overlap.any():  # ALL hits failed this filter
+                            control_losses['failed_alignment_overlap'].add(gene)
+
+                        # Filter 2: Query coverage
+                        passes_coverage = (gene_rows["query_coverage"] >= 50)
+                        if not passes_coverage.any():  # ALL hits failed this filter
+                            control_losses['failed_query_coverage'].add(gene)
+
+                        # Filter 3: Percent identity
+                        passes_identity = (gene_rows["percentage_of_identical_matches"] >= 50)
+                        if not passes_identity.any():  # ALL hits failed this filter
+                            control_losses['failed_percent_identity'].add(gene)
+
+                        # Filter 4: Uncharacterized
+                        passes_uncharacterized = ~gene_rows["subject_title"].str.contains("uncharacterized", case=False, na=False)
+                        if not passes_uncharacterized.any():  # ALL hits failed this filter
+                            control_losses['failed_uncharacterized'].add(gene)
     
     
     os.remove(temp_fasta_path)
@@ -857,6 +903,277 @@ def calculate_scores_for_hits(df_fused, df_control, gff_file=None):
 
     return df_fused
 
+def visualize_genome_structure_issues(gene_lookup, fragmented_df, control_losses, output_folder):
+    """
+    Create visual diagrams for genes with genome map issues.
+    Shows the gene parts and 3 neighboring genes on each side in the genome graph.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    from matplotlib.patches import FancyBboxPatch, FancyArrowPatch
+    import networkx as nx
+
+    # Helper function to find predecessors (genes that point to this gene)
+    def find_predecessors(target_gene_id, gene_lookup, max_depth=3):
+        """Find up to max_depth genes that have target as a neighbor."""
+        predecessors = []
+        for gene_id, node in gene_lookup.items():
+            if node.neighbors:
+                for neighbor in node.neighbors:
+                    if neighbor.gene_id == target_gene_id:
+                        predecessors.append(node)
+                        break
+        return predecessors
+
+    # Helper function to get N genes upstream
+    def get_upstream_genes(gene_id, gene_lookup, n=3):
+        """Get up to n genes upstream by traversing predecessors."""
+        upstream = []
+        # Get initial node
+        start_node = gene_lookup.get(gene_id)
+        if not start_node:
+            return upstream
+
+        current_nodes = [start_node]
+        visited = set([start_node])  # Track GeneNode objects to handle duplicate gene names
+
+        for level in range(n):
+            next_level = []
+            for curr_node in current_nodes:
+                preds = find_predecessors(curr_node.gene_id, gene_lookup)
+                for pred in preds:
+                    if pred not in visited:
+                        next_level.append(pred)
+                        visited.add(pred)
+                        upstream.append((pred.gene_id, level + 1))
+            current_nodes = next_level
+            if not current_nodes:
+                break
+        return upstream
+
+    # Helper function to get N genes downstream
+    def get_downstream_genes(gene_id, gene_lookup, n=3):
+        """Get up to n genes downstream by following neighbors."""
+        downstream = []
+        start_node = gene_lookup.get(gene_id)
+        if not start_node:
+            return downstream
+
+        current_nodes = [start_node]
+        visited = set([start_node])  # Track GeneNode objects to handle duplicate gene names
+
+        for level in range(n):
+            next_level = []
+            for curr_node in current_nodes:
+                if curr_node.neighbors:
+                    for neighbor in curr_node.neighbors:
+                        if neighbor not in visited:
+                            next_level.append(neighbor)
+                            visited.add(neighbor)
+                            downstream.append((neighbor.gene_id, level + 1))
+            current_nodes = next_level
+            if not current_nodes:
+                break
+        return downstream
+
+    # Create output directory
+    viz_dir = f"{output_folder}/genome_structure_issues"
+    os.makedirs(viz_dir, exist_ok=True)
+
+    # Process missing_from_map genes
+    for gene_id in control_losses['missing_from_map']:
+        part1_gene = f"{gene_id}_part1"
+        part2_gene = f"{gene_id}_part2"
+
+        fig, ax = plt.subplots(figsize=(20, 12))
+        G = nx.DiGraph()
+
+        # Check which parts exist
+        part1_exists = part1_gene in gene_lookup
+        part2_exists = part2_gene in gene_lookup
+
+        # Collect all genes to visualize
+        genes_to_show = set()
+
+        # Add part1 and its context
+        if part1_exists:
+            genes_to_show.add(part1_gene)
+            # Get 3 upstream and 3 downstream
+            upstream = get_upstream_genes(part1_gene, gene_lookup, n=3)
+            downstream = get_downstream_genes(part1_gene, gene_lookup, n=3)
+            for g, _ in upstream:
+                genes_to_show.add(g)
+            for g, _ in downstream:
+                genes_to_show.add(g)
+
+        # Add part2 and its context
+        if part2_exists:
+            genes_to_show.add(part2_gene)
+            upstream = get_upstream_genes(part2_gene, gene_lookup, n=3)
+            downstream = get_downstream_genes(part2_gene, gene_lookup, n=3)
+            for g, _ in upstream:
+                genes_to_show.add(g)
+            for g, _ in downstream:
+                genes_to_show.add(g)
+
+        # Build graph
+        for gene_name in genes_to_show:
+            if gene_name in gene_lookup:
+                node = gene_lookup[gene_name]
+                G.add_node(gene_name)
+                if node.neighbors:
+                    for neighbor in node.neighbors:
+                        if neighbor.gene_id in genes_to_show:
+                            G.add_edge(gene_name, neighbor.gene_id)
+
+        # Layout the graph
+        pos = nx.spring_layout(G, k=2, iterations=50)
+
+        # Draw nodes with colors
+        node_colors = []
+        for node in G.nodes():
+            if node == part1_gene and part1_exists:
+                node_colors.append('lightgreen' if part2_exists else 'lightyellow')
+            elif node == part2_gene and part2_exists:
+                node_colors.append('lightgreen')
+            elif node in [part1_gene, part2_gene]:
+                node_colors.append('lightcoral')  # Missing
+            else:
+                node_colors.append('lightblue')  # Context genes
+
+        nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=3000, ax=ax, node_shape='s')
+        nx.draw_networkx_edges(G, pos, edge_color='gray', arrows=True, arrowsize=20, ax=ax,
+                              connectionstyle='arc3,rad=0.1', width=2)
+
+        # Draw labels (shortened for readability)
+        labels = {n: n[:20] + '...' if len(n) > 20 else n for n in G.nodes()}
+        nx.draw_networkx_labels(G, pos, labels, font_size=8, font_weight='bold', ax=ax)
+
+        # Add text annotations for part1 and part2
+        if part1_gene in pos:
+            ax.annotate('PART1', xy=pos[part1_gene], xytext=(0, -40),
+                       textcoords='offset points', ha='center',
+                       bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.7),
+                       arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+        if part2_gene in pos:
+            ax.annotate('PART2', xy=pos[part2_gene], xytext=(0, -40),
+                       textcoords='offset points', ha='center',
+                       bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.7),
+                       arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+
+        # Legend
+        green_patch = mpatches.Patch(color='lightgreen', label='Part exists in map')
+        red_patch = mpatches.Patch(color='lightcoral', label='Part missing from map')
+        blue_patch = mpatches.Patch(color='lightblue', label='Context genes (±3)')
+        yellow_patch = mpatches.Patch(color='lightyellow', label='Part1 (part2 missing)')
+        ax.legend(handles=[green_patch, yellow_patch, red_patch, blue_patch], loc='upper right', fontsize=10)
+
+        ax.set_title(f"Genome Structure: {gene_id}\nIssue: Part(s) missing from genome map\nShowing ±3 genes context",
+                    fontsize=14, weight='bold')
+        ax.axis('off')
+
+        plt.tight_layout()
+        plt.savefig(f"{viz_dir}/{gene_id}_missing_from_map.png", dpi=150, bbox_inches='tight')
+        plt.close()
+
+    # Process broken_neighbors genes
+    for gene_id in control_losses['broken_neighbors']:
+        part1_gene = f"{gene_id}_part1"
+        part2_gene = f"{gene_id}_part2"
+
+        fig, ax = plt.subplots(figsize=(20, 12))
+        G = nx.DiGraph()
+
+        # Collect all genes to visualize
+        genes_to_show = set()
+
+        # Add part1 and its context
+        genes_to_show.add(part1_gene)
+        upstream = get_upstream_genes(part1_gene, gene_lookup, n=3)
+        downstream = get_downstream_genes(part1_gene, gene_lookup, n=3)
+        for g, _ in upstream:
+            genes_to_show.add(g)
+        for g, _ in downstream:
+            genes_to_show.add(g)
+
+        # Add part2 and its context
+        genes_to_show.add(part2_gene)
+        upstream = get_upstream_genes(part2_gene, gene_lookup, n=3)
+        downstream = get_downstream_genes(part2_gene, gene_lookup, n=3)
+        for g, _ in upstream:
+            genes_to_show.add(g)
+        for g, _ in downstream:
+            genes_to_show.add(g)
+
+        # Build graph
+        for gene_name in genes_to_show:
+            if gene_name in gene_lookup:
+                node = gene_lookup[gene_name]
+                G.add_node(gene_name)
+                if node.neighbors:
+                    for neighbor in node.neighbors:
+                        if neighbor.gene_id in genes_to_show:
+                            G.add_edge(gene_name, neighbor.gene_id)
+
+        # Layout the graph
+        pos = nx.spring_layout(G, k=2, iterations=50)
+
+        # Draw nodes with colors
+        node_colors = []
+        for node in G.nodes():
+            if node == part1_gene:
+                node_colors.append('lightyellow')  # Part1 (source)
+            elif node == part2_gene:
+                node_colors.append('lightcoral')  # Part2 (not a neighbor)
+            else:
+                node_colors.append('lightblue')  # Context genes
+
+        nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=3000, ax=ax, node_shape='s')
+        nx.draw_networkx_edges(G, pos, edge_color='gray', arrows=True, arrowsize=20, ax=ax,
+                              connectionstyle='arc3,rad=0.1', width=2)
+
+        # Draw labels
+        labels = {n: n[:20] + '...' if len(n) > 20 else n for n in G.nodes()}
+        nx.draw_networkx_labels(G, pos, labels, font_size=8, font_weight='bold', ax=ax)
+
+        # Add annotations
+        if part1_gene in pos:
+            ax.annotate('PART1', xy=pos[part1_gene], xytext=(0, -40),
+                       textcoords='offset points', ha='center',
+                       bbox=dict(boxstyle='round,pad=0.5', fc='yellow', alpha=0.7),
+                       arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+        if part2_gene in pos:
+            ax.annotate('PART2\n(NOT NEIGHBOR)', xy=pos[part2_gene], xytext=(0, -50),
+                       textcoords='offset points', ha='center',
+                       bbox=dict(boxstyle='round,pad=0.5', fc='red', alpha=0.7),
+                       arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
+
+        # Draw broken connection if both parts exist
+        if part1_gene in pos and part2_gene in pos:
+            x1, y1 = pos[part1_gene]
+            x2, y2 = pos[part2_gene]
+            ax.plot([x1, x2], [y1, y2], 'r--', linewidth=3, alpha=0.5, label='Expected connection (broken)')
+            mid_x, mid_y = (x1 + x2) / 2, (y1 + y2) / 2
+            ax.text(mid_x, mid_y, 'X', fontsize=30, color='red', weight='bold', ha='center', va='center')
+
+        # Legend
+        yellow_patch = mpatches.Patch(color='lightyellow', label='Part1 (source)')
+        red_patch = mpatches.Patch(color='lightcoral', label='Part2 (not a neighbor)')
+        blue_patch = mpatches.Patch(color='lightblue', label='Context genes (±3)')
+        ax.legend(handles=[yellow_patch, red_patch, blue_patch], loc='upper right', fontsize=10)
+
+        ax.set_title(f"Genome Structure: {gene_id}\nIssue: Part2 is not a neighbor of Part1\nShowing ±3 genes context",
+                    fontsize=14, weight='bold')
+        ax.axis('off')
+
+        plt.tight_layout()
+        plt.savefig(f"{viz_dir}/{gene_id}_broken_neighbors.png", dpi=150, bbox_inches='tight')
+        plt.close()
+
+    print(f"\nGenome structure visualizations saved to: {viz_dir}/")
+    print(f"  - {len(control_losses['missing_from_map'])} missing_from_map diagrams")
+    print(f"  - {len(control_losses['broken_neighbors'])} broken_neighbors diagrams")
+
 # Wrapping the main script code in main lets us use the other functions in other scripts without calling the whole thing.
 if __name__ == "__main__":
     # Argument method validators
@@ -975,6 +1292,11 @@ if __name__ == "__main__":
                         type=str,
                         default=None)
 
+    parser.add_argument('-c', '--control-report',
+                        help="Path to fragmented genes report CSV for synthetic control tracking (enables DEBUG_CONTROL mode)",
+                        type=str,
+                        default=None)
+
     args = parser.parse_args()
 
 
@@ -1044,69 +1366,51 @@ if __name__ == "__main__":
     fused_hits_genome_df_list = []
 
     genomeMap = build_genomemap(organism_name, proteome_file, gff_file, min_geneperx_threshold)
+
+    # Enable DEBUG_CONTROL if control report is provided
+    if args.control_report:
+        if os.path.exists(args.control_report):
+            DEBUG_CONTROL = True
+            fragmented_df = pd.read_csv(args.control_report)
+            print(f"DEBUG_CONTROL enabled. Tracking {len(fragmented_df)} synthetic control genes from: {args.control_report}")
+        else:
+            print(f"WARNING: Control report file not found at {args.control_report}. Skipping control gene tracking.")
+            DEBUG_CONTROL = False
+
     if DEBUG_CONTROL:
+
         # Clear debug tracking variables from any previous runs
         tested_genes.clear()
-        cumulative_tested.clear()
-        cumulative_passed.clear()
-        cumulative_filtered.clear()
-        filtered_genes = set()
-        GENOFRAG_DIR = '/home/davidbellini/OneDrive/gabbiani/TOOLS/GenoFrag/outputs/simulans_new'
-        FRAGMENTED_GFF = os.path.join(GENOFRAG_DIR, 'test_simulans_10pct.gff')
-        FRAGMENTED_FAA = os.path.join(GENOFRAG_DIR, 'test_simulans_10pct.faa')
-        FRAGMENTED_REPORT = os.path.join(GENOFRAG_DIR, 'test_simulans_10pct_report.csv')
-        fragmented_df = pd.read_csv(FRAGMENTED_REPORT)
-        all_genes_in_map = set()
+        best_diamond_hits.clear()
+        for key in control_losses:
+            control_losses[key].clear()
+        # Build lookup dictionary for O(1) gene access
+        gene_lookup = {}
         for chrom, strands in genomeMap.chromosomes.items():
             for strand_name, head_node in strands.items():
                 current = head_node
                 while current:
-                    all_genes_in_map.add(current.gene_id)
+                    gene_lookup[current.gene_id] = current
                     current = current.neighbors[0] if current.neighbors else None
 
-        # Check neighbor relationships
-        correct = 0
-        broken = 0
-        missing = 0
-
-        for idx, row in fragmented_df.iterrows():
-            gene_id = row['gene_name']
+        # Track losses during map construction using optimized lookups
+        for gene_id in fragmented_df['gene_name']:
             part1_gene = f"{gene_id}_part1"
             part2_gene = f"{gene_id}_part2"
 
-            # Check if parts exist in map
-            if part1_gene not in all_genes_in_map or part2_gene not in all_genes_in_map:
-                missing += 1
-                filtered_genes.add(gene_id)
+            # Check if parts exist in map (O(1) lookup)
+            if part1_gene not in gene_lookup or part2_gene not in gene_lookup:
+                control_losses['missing_from_map'].add(gene_id)
                 continue
 
-            # Find part1 node and check if part2 is its neighbor
-            found_correct_neighbor = False
-            for chrom, strands in genomeMap.chromosomes.items():
-                for strand_name, head_node in strands.items():
-                    current = head_node
-                    while current:
-                        if current.gene_id == part1_gene:
-                            if current.neighbors:
-                                neighbor_ids = [n.gene_id for n in current.neighbors]
-                                if part2_gene in neighbor_ids:
-                                    found_correct_neighbor = True
-                            break
-                        current = current.neighbors[0] if current.neighbors else None
-                if found_correct_neighbor:
-                    break
-
-            if found_correct_neighbor:
-                correct += 1
+            # Check if part2 is a neighbor of part1 (O(1) lookup)
+            part1_node = gene_lookup[part1_gene]
+            if part1_node.neighbors:
+                neighbor_ids = [n.gene_id for n in part1_node.neighbors]
+                if part2_gene not in neighbor_ids:
+                    control_losses['broken_neighbors'].add(gene_id)
             else:
-                broken += 1
-                filtered_genes.add(gene_id)
-
-        print(f"\ngenoMap relationships:")
-        print(f"  Correct: {correct} ({100 * correct / len(fragmented_df):.1f}%)")
-        print(f"  Broken: {broken} ({100 * broken / len(fragmented_df):.1f}%)")
-        print(f"  Missing from map: {missing} ({100 * missing / len(fragmented_df):.1f}%)")
-        print(f"1st FILTER LOST {len(filtered_genes)} genes")
+                control_losses['broken_neighbors'].add(gene_id)
 
     # Initializing a progress bar for tracking the program's status.
     total_steps = (len(genomeMap.chromosomes.keys()) * 4) + 1 
@@ -1149,9 +1453,6 @@ if __name__ == "__main__":
                     pbar.update(1)
 
                     if DEBUG_CONTROL:
-                        if tested_genes:
-                            print(f"  {chrom} {strand_name}: Tested {len(tested_genes)} fragmented genes this strand")
-                            cumulative_tested.update(tested_genes)
                         tested_genes.clear()  # Reset for next strand
 
                     # Process unfused proteins second
@@ -1180,6 +1481,22 @@ if __name__ == "__main__":
         fused_hits_scored_filtered = fused_hits_scored.loc[highest_composite_score].reset_index(drop=True)
         fused_hits_scored_filtered = fused_hits_scored_filtered.sort_values(by="composite_score", ascending=False).reset_index(drop=True)
 
+        # Enrich best_diamond_hits with composite_score and organism_count
+        if DEBUG_CONTROL and best_diamond_hits:
+            for gene_id, hit_info in best_diamond_hits.items():
+                fused_protein = hit_info.get('fused_protein')
+                if fused_protein and not pd.isna(fused_protein):
+                    # Find this fused_protein in the scored dataframe
+                    matching_rows = fused_hits_scored[fused_hits_scored['fused_protein'] == fused_protein]
+                    if not matching_rows.empty:
+                        # Get the row with highest composite score for this fused_protein
+                        best_score_idx = matching_rows['composite_score'].idxmax()
+                        best_score_row = matching_rows.loc[best_score_idx]
+
+                        # Add composite score and organism count to the hit info
+                        hit_info['composite_score'] = best_score_row.get('composite_score', '')
+                        hit_info['organism_count'] = best_score_row.get('organism_count', '')
+
         # Generate all output formats (CSV, TSV, Excel)
         print("Generating output files...")
         output_formatter.generate_all_outputs(
@@ -1195,19 +1512,116 @@ if __name__ == "__main__":
         pd.DataFrame(columns=["fused_gene", "fused_product", "fused_gene_len", "gene_1", "product_1",
                               "gene_1_len", "gene_2", "product_2", "gene_2_len"]).to_csv(f"{output_folder}/full_statistics_genome_results.csv")
 
-    if DEBUG_CONTROL:
-        print("\nCUMULATIVE DEBUG SUMMARY:")
-        print(f"Total fragmented genes tested: {len(cumulative_tested)}")
-        print(f"Genes that PASSED all filters: {len(cumulative_passed)} ({100*len(cumulative_passed)/len(cumulative_tested) if cumulative_tested else 0:.1f}%)")
-        print(f"Genes that were FILTERED OUT: {len(cumulative_filtered)} ({100*len(cumulative_filtered)/len(cumulative_tested) if cumulative_tested else 0:.1f}%)")
-        if cumulative_filtered:
-            print(f"Example filtered genes: {list(cumulative_filtered)[:10]}")
-        if fragmented_df is not None:
-            total_fragmented = fragmented_df['gene_name'].nunique()
-            print(f"Total genes in GenoFrag report: {total_fragmented}")
-            print(f"Genes in tested set: {len(cumulative_tested)} ({100*len(cumulative_tested)/total_fragmented:.1f}%)")
-            not_tested = total_fragmented - len(cumulative_tested)
-            if not_tested > 0:
-                print(f"⚠ Genes NOT tested (filtered earlier): {not_tested}")
+    if DEBUG_CONTROL and fragmented_df is not None:
+        total_genes = fragmented_df['gene_name'].nunique()
+
+        # Build detailed gene-level report
+        gene_reports = []
+
+        for gene_id in fragmented_df['gene_name'].unique():
+            # Determine filter step
+            if gene_id in control_losses['missing_from_map']:
+                filter_step = 'missing_from_map'
+                notes = 'Part1 or Part2 not found in genome map'
+            elif gene_id in control_losses['broken_neighbors']:
+                filter_step = 'broken_neighbors'
+                notes = 'Part2 is not a neighbor of Part1 in genome graph'
+            elif gene_id in control_losses['missing_proteins']:
+                filter_step = 'missing_proteins'
+                notes = 'Part1 or Part2 has no protein isoforms'
+            elif gene_id in control_losses['no_diamond_hits']:
+                filter_step = 'no_diamond_hits'
+                notes = 'DIAMOND returned no alignments'
+            elif gene_id in control_losses['failed_alignment_overlap']:
+                filter_step = 'failed_alignment_overlap'
+                notes = 'All hits failed to span gene boundary by 10 AA'
+            elif gene_id in control_losses['failed_query_coverage']:
+                filter_step = 'failed_query_coverage'
+                notes = 'All hits had <50% query coverage'
+            elif gene_id in control_losses['failed_percent_identity']:
+                filter_step = 'failed_percent_identity'
+                notes = 'All hits had <50% sequence identity'
+            elif gene_id in control_losses['failed_uncharacterized']:
+                filter_step = 'failed_uncharacterized'
+                notes = 'All hits were to uncharacterized proteins'
+            elif gene_id in control_losses['passed_all_filters']:
+                # Skip genes that passed - we only want to report problems
+                continue
+            else:
+                filter_step = 'not_tested'
+                notes = 'Gene was not tested (not encountered during processing)'
+                control_losses['not_tested'].add(gene_id)
+
+            # Get best DIAMOND hit info if available
+            best_hit = best_diamond_hits.get(gene_id, {})
+
+            gene_reports.append({
+                'gene_name': gene_id,
+                'filter_step': filter_step,
+                'fused_protein': best_hit.get('fused_protein', ''),
+                'composite_score': best_hit.get('composite_score', ''),
+                'organism_count': best_hit.get('organism_count', ''),
+                'subject_id': best_hit.get('subject_id', ''),
+                'subject_title': best_hit.get('subject_title', ''),
+                'bitscore': best_hit.get('bitscore', ''),
+                'qcoverage': best_hit.get('qcoverage', ''),
+                'pident': best_hit.get('pident', ''),
+                'evalue': best_hit.get('evalue', ''),
+                'alignment_start': best_hit.get('alignment_start', ''),
+                'alignment_end': best_hit.get('alignment_end', ''),
+                'gene_1_len_aa': best_hit.get('gene_1_len', ''),
+                'gene_2_len_aa': best_hit.get('gene_2_len', ''),
+                'fused_gene_len_aa': best_hit.get('fused_gene_len', ''),
+                'overlap_status': best_hit.get('overlap_status', ''),
+                'part1_overlap_aa': best_hit.get('part1_overlap_depth', ''),
+                'part2_overlap_aa': best_hit.get('part2_overlap_depth', ''),
+                'notes': notes
+            })
+
+        # Create DataFrame and save detailed report
+        detailed_df = pd.DataFrame(gene_reports)
+        detailed_df.to_csv(f"{output_folder}/control_gene_tracking_detailed.csv", index=False)
+
+        # Build summary from detailed report to avoid double-counting genes in multiple categories
+        # Add passed_all_filters count separately since it's not in detailed report
+        summary_rows = []
+
+        # Count genes per filter_step from detailed report (no overlaps)
+        if not detailed_df.empty:
+            category_counts = detailed_df.groupby('filter_step')['gene_name'].nunique()
+            for category, count in category_counts.items():
+                pct = 100 * count / total_genes if total_genes > 0 else 0
+                summary_rows.append({
+                    'filter_step': category,
+                    'genes_lost': count,
+                    'percentage': round(pct, 2)
+                })
+
+        # Add passed_all_filters from control_losses (these genes are skipped in detailed report)
+        passed_count = len(control_losses['passed_all_filters'])
+        passed_pct = 100 * passed_count / total_genes if total_genes > 0 else 0
+        summary_rows.append({
+            'filter_step': 'passed_all_filters',
+            'genes_lost': passed_count,
+            'percentage': round(passed_pct, 2)
+        })
+
+        summary_df = pd.DataFrame(summary_rows)
+        summary_df.to_csv(f"{output_folder}/control_gene_tracking_summary.csv", index=False)
+
+        # Print summary table
+        print("\n=== SYNTHETIC CONTROL GENE TRACKING SUMMARY ===")
+        print(f"Total fragmented genes: {total_genes}")
+        print(f"\n{'Filter Step':<30} {'Genes Lost':<12} {'Percentage':<12}")
+        print("-" * 55)
+        for _, row in summary_df.iterrows():
+            print(f"{row['filter_step']:<30} {row['genes_lost']:<12} {row['percentage']:>6.2f}%")
+        print("=" * 55)
+        print(f"Summary: {output_folder}/control_gene_tracking_summary.csv")
+        print(f"Detailed: {output_folder}/control_gene_tracking_detailed.csv")
+
+        # Generate visualizations for genome structure issues
+        if control_losses['missing_from_map'] or control_losses['broken_neighbors']:
+            visualize_genome_structure_issues(gene_lookup, fragmented_df, control_losses, output_folder)
 
     print("Your results are ready.")
