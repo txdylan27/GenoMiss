@@ -840,6 +840,14 @@ if __name__ == "__main__":
                         help="Taxon ID of the organism. Use to filter self-hits during DIAMOND",
                         type=str,
                         default=None)
+    parser.add_argument('--synthesize-evidence', action='store_true',
+                        help="After the run, synthesize multi-evidence reports for the top hits "
+                             "(see evidence_synthesis/). Requires the evidence_synthesis deps.")
+    parser.add_argument('--synthesize-top', type=int, default=10,
+                        help="Number of top-scoring hits to synthesize (default 10).")
+    parser.add_argument('--synthesize-new-gff', type=str, default=None,
+                        help="Optional second annotation GFF (same assembly) for the "
+                             "dual-annotation locus figure.")
 
     args = parser.parse_args()
 
@@ -985,6 +993,20 @@ if __name__ == "__main__":
             organism_name=organism_name,
             output_folder=output_folder
         )
+
+        # Optional prospective evidence synthesis on the top hits (thin hook; only
+        # imports the evidence_synthesis deps when --synthesize-evidence is set).
+        if args.synthesize_evidence:
+            print(f"Synthesizing evidence for the top {args.synthesize_top} hits...")
+            from evidence_synthesis.config import AMERICANA
+            from evidence_synthesis import synthesize as _ev
+            hits_csv = f"{output_folder}/fused_hits.csv"
+            top_ids = fused_hits_scored_filtered["fused_protein"].head(args.synthesize_top).tolist()
+            cfg = AMERICANA.with_overrides(
+                proteome=proteome_file, run_gff=gff_file, diamond_db=db,
+                taxon_exclude=taxon_id, new_gff=args.synthesize_new_gff,
+                outdir=f"{output_folder}/evidence_synthesis")
+            _ev.synthesize(cfg, hits_csv, top_ids)
 
     else:
         print("No fused genes found across all chromosomes/strands.")
