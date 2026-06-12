@@ -179,11 +179,9 @@ def zoom_figure(hit, cfg: Config, reads, out_png: str,
     if hit.chrom is None or not reads:
         return None
     chrom = hit.chrom
-    # Show only reads whose (library-corrected) transcript strand matches the genes;
-    # opposite-sense reads are excluded from the figure (still reported in the table).
-    n_total = len(reads)
+    # reads arrive sense-only (read_level excludes opposite-strand bridging reads); guard
+    # defensively in case the figure is called directly.
     reads = [r for r in reads if r.tx_strand == hit.strand]
-    n_anti = n_total - len(reads)
     if not reads:
         return None
     read_blocks = [b for r in reads for b in r.blocks]
@@ -230,9 +228,8 @@ def zoom_figure(hit, cfg: Config, reads, out_png: str,
         y -= 0.2
 
     umis = len({(r.barcode, r.umi) for r in reads if r.barcode and r.umi})
-    note = f"; {n_anti} antisense excluded" if n_anti else ""
-    ax.set_title(f"Sense bridging reads across the gene1–gene2 region — {len(reads)} reads, "
-                 f"{umis} distinct UMIs  ({chrom}; introns compressed{note})", fontsize=9)
+    ax.set_title(f"Bridging reads across the gene1–gene2 region — {len(reads)} reads, "
+                 f"{umis} distinct UMIs  ({chrom}; introns compressed)", fontsize=9)
     ax.set_xlim(-3, comp.xmax + 1)
     ax.set_ylim(y - 0.5, ytop + 3.1)
     ax.axis("off")
