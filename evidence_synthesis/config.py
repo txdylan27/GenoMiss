@@ -70,6 +70,9 @@ class Config:
     bulk_matrix: Optional[str] = ("/home/davidbellini/OneDrive/gabbiani/PROJECTS/"
                                   "genomiss_validations/supporting/americana_bulk_counts_maeva.csv")
     bulk_id_map: Optional[str] = None
+    # substring selecting which bulk sample columns to correlate over (None = all).
+    # "head" -> head samples only, avoiding the head/thorax tissue confound in the pooled r.
+    bulk_sample_filter: Optional[str] = "head"
 
     # --- output ---
     outdir: str = f"{TOOL}/evidence_synthesis/output"

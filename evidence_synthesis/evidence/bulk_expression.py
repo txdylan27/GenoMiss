@@ -44,7 +44,15 @@ def run(hit, cfg: Config, log=sys.stdout) -> dict:
         missing = [g for g, v in ((hit.gene_1, g1), (hit.gene_2, g2)) if v is None]
         return {"status": "skipped", "reason": f"gene(s) not in bulk matrix: {missing}"}
 
+    # restrict to the configured sample set (default: head only, to avoid the
+    # head/thorax tissue confound that inflates the pooled correlation)
     samples = mat.columns.tolist()
+    sample_set = cfg.bulk_sample_filter or "all"
+    if cfg.bulk_sample_filter:
+        samples = [c for c in samples if cfg.bulk_sample_filter.lower() in str(c).lower()]
+    if not samples:
+        return {"status": "skipped",
+                "reason": f"no bulk samples match filter {cfg.bulk_sample_filter!r}"}
     v1 = mat.loc[g1, samples].astype(float)
     v2 = mat.loc[g2, samples].astype(float)
     # Pearson on log1p to damp count-scale skew
@@ -56,10 +64,12 @@ def run(hit, cfg: Config, log=sys.stdout) -> dict:
     os.makedirs(outdir, exist_ok=True)
     table.to_csv(os.path.join(outdir, f"{hit.name}_bulk_expression.csv"), index=False)
 
-    print(f"[bulk] {g1}/{g2}: mean {v1.mean():.1f}/{v2.mean():.1f}, "
-          f"log1p Pearson r={corr:.3f} over {len(samples)} samples", file=log, flush=True)
+    print(f"[bulk] {g1}/{g2} [{sample_set}]: mean {v1.mean():.1f}/{v2.mean():.1f}, "
+          f"log1p Pearson r={corr:.3f} over {len(samples)} {sample_set} samples",
+          file=log, flush=True)
     return {"status": "ok",
-            "summary": {"bulk_g1": g1, "bulk_g2": g2, "n_samples": len(samples),
+            "summary": {"bulk_g1": g1, "bulk_g2": g2, "sample_set": sample_set,
+                        "n_samples": len(samples),
                         "mean_g1": round(float(v1.mean()), 2), "mean_g2": round(float(v2.mean()), 2),
                         "log1p_pearson_r": round(corr, 3)},
             "tables": {"bulk_expression": table}}

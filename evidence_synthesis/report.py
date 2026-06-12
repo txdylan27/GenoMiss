@@ -67,9 +67,10 @@ def _line_metrics(name, res):
                 ("% cells co-express", s.get("pct_cells_coexpr")),
                 ("Jaccard co-expression", s.get("jaccard_coexpr"))]
     if name == "bulk_expression":
-        return [("samples", s.get("n_samples")),
+        ss = s.get("sample_set", "all")
+        return [("samples", f"{s.get('n_samples')} ({ss})"),
                 ("mean g1 / g2", f"{s.get('mean_g1')} / {s.get('mean_g2')}"),
-                ("log1p Pearson r", s.get("log1p_pearson_r"))]
+                (f"log1p Pearson r ({ss})", s.get("log1p_pearson_r"))]
     return [(k, v) for k, v in s.items()]
 
 
