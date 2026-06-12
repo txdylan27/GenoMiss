@@ -27,13 +27,12 @@ def run(hit, cfg: Config, log=sys.stdout) -> dict:
     umis = {(r.barcode, r.umi) for r in reads if r.barcode and r.umi}
     barcodes = {r.barcode for r in reads if r.barcode}
 
-    def rstrand(r):
-        return "-" if r.is_reverse else "+"
-    n_sense = sum(rstrand(r) == hit.strand for r in reads)
+    # concordance uses the library-corrected TRANSCRIPT strand, not the read flag strand
+    n_sense = sum(r.tx_strand == hit.strand for r in reads)
     rows = [dict(qname=r.qname, barcode=r.barcode, umi=r.umi, mapq=r.mapq, nh=r.nh,
-                 read_strand=rstrand(r), gene_strand=hit.strand,
-                 strand_concordant=(rstrand(r) == hit.strand), direction=r.direction,
-                 donor=r.donor, acceptor=r.acceptor,
+                 read_flag_strand=("-" if r.is_reverse else "+"), tx_strand=r.tx_strand,
+                 gene_strand=hit.strand, strand_concordant=(r.tx_strand == hit.strand),
+                 direction=r.direction, donor=r.donor, acceptor=r.acceptor,
                  left_overhang=r.left_overhang, right_overhang=r.right_overhang)
             for r in reads]
     table = pd.DataFrame(rows)

@@ -53,6 +53,10 @@ class Config:
     require_nh1: bool = True
     min_overhang_bp: int = 8               # min aligned bp flanking the splice on each side
     junction_tol_bp: int = 10              # tolerance matching an N-gap to the gene1->gene2 intron
+    # featureCounts -s strandedness of the library (mapping_pipeline nextflow.config: 2).
+    # Single-end + reverse-stranded => transcript strand is OPPOSITE the read flag strand
+    # (this is the source of IGV's apparent strand flip). 1=forward, 2=reverse, 0=unstranded.
+    library_strandedness: int = 2
     # barcode/UMI parsed from read name: <illumina_id>_<barcode>_<UMI>
     readname_bc_umi_regex: str = r"_([ACGTN]+)_([ACGTN]+)$"
 

@@ -130,8 +130,11 @@ def overview_figure(hit, cfg: Config, out_png: str) -> Optional[str]:
     chrom, w0, w1 = hit.locus_window
     pad = int(0.02 * (w1 - w0))
     w0, w1 = w0 - pad, w1 + pad
-    old = gff_model.models_in_window(cfg.run_gff, chrom, w0, w1, source="NCBI")
-    new = gff_model.models_in_window(cfg.new_gff, chrom, w0, w1, source="new")
+    # keep only same-strand genes as the pair of interest (drop opposite-sense clutter)
+    old = [m for m in gff_model.models_in_window(cfg.run_gff, chrom, w0, w1, "NCBI")
+           if m.strand == hit.strand]
+    new = [m for m in gff_model.models_in_window(cfg.new_gff, chrom, w0, w1, "new")
+           if m.strand == hit.strand]
     anchors = [ex for m in (old + new) for ex in m.exons]
     comp = CoordCompressor(anchors, (w0, w1), gap_w=6.0)
     g1span = (hit.gene1_model.start, hit.gene1_model.end)
@@ -176,14 +179,24 @@ def zoom_figure(hit, cfg: Config, reads, out_png: str,
     if hit.chrom is None or not reads:
         return None
     chrom = hit.chrom
+    # Show only reads whose (library-corrected) transcript strand matches the genes;
+    # opposite-sense reads are excluded from the figure (still reported in the table).
+    n_total = len(reads)
+    reads = [r for r in reads if r.tx_strand == hit.strand]
+    n_anti = n_total - len(reads)
+    if not reads:
+        return None
     read_blocks = [b for r in reads for b in r.blocks]
     pad = 800
     # anchor on the read sites; pull in the nearest exon on each flank for context
     anchors = [(s - pad, e + pad) for s, e in read_blocks]
     w0 = min(a[0] for a in anchors) - 6000
     w1 = max(a[1] for a in anchors) + 6000
-    old = gff_model.models_in_window(cfg.run_gff, chrom, w0, w1, source="NCBI")
-    new = gff_model.models_in_window(cfg.new_gff, chrom, w0, w1, source="new")
+    # keep only same-strand genes (drop opposite-sense neighbours, e.g. tRNAs)
+    old = [m for m in gff_model.models_in_window(cfg.run_gff, chrom, w0, w1, "NCBI")
+           if m.strand == hit.strand]
+    new = [m for m in gff_model.models_in_window(cfg.new_gff, chrom, w0, w1, "new")
+           if m.strand == hit.strand]
     all_exons = [ex for m in (old + new) for ex in m.exons]
     for (s, e) in read_blocks:                       # nearest exon within 12 kb of a read end
         near = [ex for ex in all_exons if min(ex[1], e + 12000) - max(ex[0], s - 12000) > 0]
@@ -202,30 +215,24 @@ def zoom_figure(hit, cfg: Config, reads, out_png: str,
                 exon_h=0.45)
     _coord_ticks(ax, comp, ytop - 1.0)
 
-    # individual reads (sense vs antisense relative to the genes' strand)
+    # individual reads: aligned blocks joined by splice arcs that return to the baseline
     y = ytop - 1.6
     for r in sorted(reads, key=lambda r: r.donor):
         blocks = sorted(r.blocks)
-        rstrand = "-" if r.is_reverse else "+"
-        concordant = (rstrand == hit.strand)
-        col = "#1A237E" if concordant else "#C62828"
-        ax.plot([comp.x(blocks[0][0]), comp.x(blocks[-1][1])], [y, y],
-                color="#CCCCCC", lw=0.5, zorder=2)          # full read extent
         for (s, e) in blocks:
             x0, x1 = comp.xi(s, e)
-            ax.plot([x0, max(x1, x0 + 0.4)], [y, y], color=col, lw=2.6,
-                    solid_capstyle="butt", zorder=4)         # aligned blocks
-        ax.plot([comp.x(r.donor), comp.x(r.acceptor)], [y, y + 0.22],
-                color="#9E9E9E", lw=0.5, zorder=3)           # splice
-        y -= 0.18
+            ax.plot([x0, max(x1, x0 + 0.4)], [y, y], color="#1A237E", lw=2.8,
+                    solid_capstyle="butt", zorder=4)          # aligned blocks
+        for i in range(len(blocks) - 1):                      # splice arc per gap
+            xe, xs = comp.x(blocks[i][1]), comp.x(blocks[i + 1][0])
+            ax.plot([xe, (xe + xs) / 2, xs], [y, y + 0.16, y], color="#9E9E9E",
+                    lw=0.6, zorder=3)
+        y -= 0.2
 
     umis = len({(r.barcode, r.umi) for r in reads if r.barcode and r.umi})
-    nsense = sum((("-" if r.is_reverse else "+") == hit.strand) for r in reads)
-    ax.plot([], [], color="#1A237E", lw=2.6, label=f"sense ({nsense})")
-    ax.plot([], [], color="#C62828", lw=2.6, label=f"antisense ({len(reads)-nsense})")
-    ax.legend(loc="lower left", fontsize=6, frameon=False, ncol=2)
-    ax.set_title(f"Bridging reads across the gene1–gene2 region — {len(reads)} reads, "
-                 f"{umis} distinct UMIs  ({chrom}; introns compressed)", fontsize=9)
+    note = f"; {n_anti} antisense excluded" if n_anti else ""
+    ax.set_title(f"Sense bridging reads across the gene1–gene2 region — {len(reads)} reads, "
+                 f"{umis} distinct UMIs  ({chrom}; introns compressed{note})", fontsize=9)
     ax.set_xlim(-3, comp.xmax + 1)
     ax.set_ylim(y - 0.5, ytop + 3.1)
     ax.axis("off")

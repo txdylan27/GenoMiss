@@ -22,6 +22,18 @@ _CONSUME_REF = {0, 2, 3, 7, 8}          # M D N = X consume reference
 _ALN_BLOCK = {0, 7, 8}                   # M = X are aligned (matched) blocks
 
 
+def transcript_strand(is_reverse: bool, strandedness: int) -> str:
+    """Map a read's flag strand to the strand of the transcript it came from, given the
+    library's featureCounts strandedness. Reverse-stranded single-end data (the usual
+    case, and the source of IGV's apparent flip) means transcript = opposite of flag."""
+    flag = "-" if is_reverse else "+"
+    if strandedness == 1:                 # forward-stranded
+        return flag
+    if strandedness == 2:                 # reverse-stranded
+        return "+" if flag == "-" else "-"
+    return "."                            # unstranded -> strand uninformative
+
+
 @dataclass
 class BridgingRead:
     qname: str
@@ -30,6 +42,7 @@ class BridgingRead:
     mapq: int
     nh: Optional[int]
     is_reverse: bool
+    tx_strand: str             # transcript strand (library-corrected), NOT the read flag strand
     donor: int                 # 0-based first intronic base of the gene1<->gene2 N-gap
     acceptor: int              # 0-based first exonic base after the intron
     direction: str             # "gene1->gene2" or "gene2->gene1"
@@ -112,10 +125,12 @@ def scan_bridging_reads(hit, cfg, log=sys.stdout):
 
         m = bc_umi.search(r.query_name)
         barcode, umi = (m.group(1), m.group(2)) if m else (None, None)
+        txs = transcript_strand(r.is_reverse, cfg.library_strandedness)
         reads.append(BridgingRead(qname=r.query_name, barcode=barcode, umi=umi,
                                   mapq=r.mapping_quality, nh=nh, is_reverse=r.is_reverse,
-                                  donor=donor, acceptor=acceptor, direction=direction,
-                                  left_overhang=lo, right_overhang=ro, blocks=blocks))
+                                  tx_strand=txs, donor=donor, acceptor=acceptor,
+                                  direction=direction, left_overhang=lo, right_overhang=ro,
+                                  blocks=blocks))
         stats["kept"] += 1
     bam.close()
     print(f"[bam] inspected={stats['inspected']} bridging_Ngap={stats['has_njunction']} "
