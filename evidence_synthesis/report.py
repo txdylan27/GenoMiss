@@ -96,7 +96,7 @@ def add_hit_sheet(wb, bundle):
         r += 1
 
     r += 1
-    for name in ["cross_species", "taxonomy", "read_through", "read_level",
+    for name in ["cross_species", "taxonomy", "read_level", "read_through",
                  "coexpression", "bulk_expression"]:
         res = results.get(name, {"status": "skipped", "reason": "not run"})
         c = ws.cell(r, 1, _LINE_TITLES[name])
@@ -281,7 +281,7 @@ def write_summary_md(hit, results, figs, path):
              f"({hit.strand})  ")
     L.append(f"**GenoMiss composite score:** {hit.composite_score}\n")
     L.append("Evidence below is presented without an automated one-gene-vs-two verdict.\n")
-    for name in ["cross_species", "taxonomy", "read_through", "read_level",
+    for name in ["cross_species", "taxonomy", "read_level", "read_through",
                  "coexpression", "bulk_expression"]:
         res = results.get(name, {"status": "skipped", "reason": "not run"})
         L.append(f"## {_LINE_TITLES[name]}")
