@@ -76,6 +76,6 @@ def synthesize(cfg: Config, hits_csv: str, fused_ids, names=None, xlsx_name="evi
     for fid, nm in zip(fused_ids, names):
         bundles.append(synthesize_hit(cfg, hits_csv, fid, name=nm))
     out_xlsx = os.path.join(cfg.outdir, xlsx_name)
-    report.build_workbook(bundles, out_xlsx)
+    report.build_workbook(bundles, out_xlsx, cfg)
     print(f"\nWrote workbook -> {out_xlsx}")
     return bundles

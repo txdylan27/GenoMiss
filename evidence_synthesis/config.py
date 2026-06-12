@@ -28,6 +28,7 @@ class Config:
     new_gff: str = f"{TOOL}/input_files/sheina2025_schistocercaAmericana.gff"
     taxon_exclude: str = "7009"            # S. americana (self); from run_gff ##species
     focal_organism: str = "Drosophila melanogaster"
+    entrez_email: str = "david.bellini@bcm.edu"   # required by NCBI E-utilities
 
     # DIAMOND breadth: capped reproduces GenoMiss exactly; uncapped = true taxonomic breadth
     max_target_capped: int = 200           # GenoMiss.py:871

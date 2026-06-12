@@ -14,7 +14,7 @@ import sys
 import pandas as pd
 
 from ..config import Config
-from .. import diamond_utils
+from .. import diamond_utils, ncbi_symbol
 
 
 def _per_half_coverage(df: pd.DataFrame, g1: int, g2len: int) -> pd.DataFrame:
@@ -70,17 +70,24 @@ def run(hit, cfg: Config, log=sys.stdout) -> dict:
             best_qcov=float(top["query_coverage"]),
             best_g1_frac=float(top["g1_frac"]), best_g2_frac=float(top["g2_frac"]))
 
-    # focal genome best hit
+    # focal genome (D. melanogaster) best hit -> resolve gene symbol via NCBI (fallback:
+    # cleaned protein title)
     foc = un[un["subject_title"].str.contains(cfg.focal_organism, na=False)] if not un.empty else un
     if foc is not None and not foc.empty:
         fr = foc.sort_values("bit_score", ascending=False).iloc[0]
+        acc = str(fr["subject_id"])
+        cache_path = os.path.join(cfg.outdir, "_symbol_cache.json")
+        sym = (ncbi_symbol.gene_symbol(acc, cfg.entrez_email, cache_path)
+               or ncbi_symbol.clean_title(fr["subject_title"]))
         result["summary"]["focal_organism"] = cfg.focal_organism
-        result["summary"]["focal_best_hit"] = str(fr["subject_id"])
+        result["summary"]["focal_symbol"] = sym
+        result["summary"]["focal_best_hit"] = acc
         result["summary"]["focal_pident"] = float(fr["percentage_of_identical_matches"])
         result["summary"]["focal_g1_frac"] = float(fr["g1_frac"])
         result["summary"]["focal_g2_frac"] = float(fr["g2_frac"])
     else:
         result["summary"]["focal_best_hit"] = None
+        result["summary"]["focal_symbol"] = None
 
     result["breadth"] = breadth
     result["tables"]["cross_species_top_hits"] = un.head(25) if not un.empty else un

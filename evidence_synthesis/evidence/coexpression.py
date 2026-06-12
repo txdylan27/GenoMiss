@@ -79,7 +79,7 @@ def run(hit, cfg: Config, log=sys.stdout) -> dict:
         return {"status": "ok", "tables": {},
                 "summary": {"atlas_var_g1": v1, "atlas_var_g2": v2,
                             "merged_in_new_annotation": True,
-                            "pct_cells_coexpr": None, "jaccard_coexpr": None}}
+                            "frac_cells_coexpr": None, "jaccard_coexpr": None}}
 
     def col(v):
         x = adata[:, v].X
@@ -108,12 +108,12 @@ def run(hit, cfg: Config, log=sys.stdout) -> dict:
     n_either = int((b1 | b2).sum())
     summary = {
         "atlas_var_g1": v1, "atlas_var_g2": v2,
-        "pct_cells_expr_g1": round(100 * b1.mean(), 2),
-        "pct_cells_expr_g2": round(100 * b2.mean(), 2),
-        "pct_cells_coexpr": round(100 * (b1 & b2).mean(), 2),
+        "frac_cells_expr_g1": round(float(b1.mean()), 3),
+        "frac_cells_expr_g2": round(float(b2.mean()), 3),
+        "frac_cells_coexpr": round(float((b1 & b2).mean()), 3),
         "jaccard_coexpr": round(int((b1 & b2).sum()) / n_either, 3) if n_either else 0.0,
         "celltype_col": ctcol,
     }
-    print(f"[coexpression] {v1}/{v2}: coexpr {summary['pct_cells_coexpr']}% of cells, "
+    print(f"[coexpression] {v1}/{v2}: coexpr frac {summary['frac_cells_coexpr']} of cells, "
           f"jaccard {summary['jaccard_coexpr']}", file=log, flush=True)
     return {"status": "ok", "summary": summary, "tables": {"coexpression_by_celltype": per_type}}
