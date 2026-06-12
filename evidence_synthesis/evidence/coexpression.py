@@ -71,6 +71,15 @@ def run(hit, cfg: Config, log=sys.stdout) -> dict:
         missing = [g for g, v in ((hit.gene_1, v1), (hit.gene_2, v2)) if v is None]
         return {"status": "skipped",
                 "reason": f"gene(s) not found in atlas: {missing} (supply atlas_id_map)"}
+    if v1 == v2:
+        # both LOC genes overlap a single gene in the new annotation -> already merged there;
+        # co-occurrence is degenerate (same gene). Report the merge, not a fake jaccard.
+        print(f"[coexpression] {hit.gene_1}+{hit.gene_2} both map to {v1} "
+              f"-> merged in new annotation; co-occurrence N/A", file=log, flush=True)
+        return {"status": "ok", "tables": {},
+                "summary": {"atlas_var_g1": v1, "atlas_var_g2": v2,
+                            "merged_in_new_annotation": True,
+                            "pct_cells_coexpr": None, "jaccard_coexpr": None}}
 
     def col(v):
         x = adata[:, v].X

@@ -51,18 +51,19 @@ def _line_metrics(name, res):
                 ("DB universe (n species)", s.get("db_universe_n")),
                 ("overall hit rate %", s.get("overall_hitrate_pct"))]
     if name == "read_through":
-        return [("SJ junctions (gene1<->gene2)", s.get("n_sj_junctions")),
-                ("canonical motif", s.get("n_canonical")),
-                ("top junction", f"{s.get('top_junction','-')} motif={s.get('top_motif','-')} "
-                 f"strand_match={s.get('top_strand_match','-')} novel={s.get('top_novel','-')} "
-                 f"unique_reads={s.get('top_unique_reads','-')}"),
-                ("BAM-confirmed junctions", s.get("n_bam_junctions"))]
+        return [("distinct junctions", s.get("n_junctions")),
+                ("top junction (coords)", s.get("top_junction")),
+                ("top junction reads / UMIs", f"{s.get('top_reads')} / {s.get('top_umis')}"),
+                ("reads at top / total", f"{s.get('reads_at_top')} / {s.get('total_bridging_reads')}")]
     if name == "read_level":
         return [("bridging reads", s.get("n_bridging_reads")),
                 ("distinct UMIs", s.get("n_distinct_umis")),
                 ("distinct barcodes", s.get("n_distinct_barcodes")),
                 ("reads inspected", s.get("scan_inspected"))]
     if name == "coexpression":
+        if s.get("merged_in_new_annotation"):
+            return [("atlas gene", f"{s.get('atlas_var_g1')} (both LOCs map here)"),
+                    ("new annotation", "MERGED into one gene — co-occurrence N/A")]
         return [("atlas genes", f"{s.get('atlas_var_g1')} / {s.get('atlas_var_g2')}"),
                 ("% cells co-express", s.get("pct_cells_coexpr")),
                 ("Jaccard co-expression", s.get("jaccard_coexpr"))]
