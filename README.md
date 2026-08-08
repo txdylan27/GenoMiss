@@ -45,7 +45,7 @@ These genes can then be evaluted in wet-lab or by re-running computationally exp
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/txdylan27/GenoMiss.git
+git clone https://github.com/dr-dvice/GenoMiss.git
 cd GenoMiss
 ```
 
@@ -144,15 +144,15 @@ The tool uses a composite scoring system (0-100 scale) that combines five compon
 |-----------|--------|-------------|
 | **Query Coverage** | 50% | Percentage of the fused protein sequence covered by the alignment |
 | **Bit Score Improvement** | 15% | Relative improvement of fused protein bit score compared to individual gene part bit scores |
-| **Organism Count** | 10% | Number of different organisms with hits to the fused gene |
+| **Organism Count** | 10% | Number of different organisms with hits to the fused gene, relative to the max amount possible in the provided proteome database |
 | **Percent Identity** | 20% | Percentage of identical Amino Acids between the fused protein and the aligned subject |
 | **E-value** | 5% | Statistical significance of the alignment (lower e-values increase confidence) |
 
 ### Score Interpretation
 
-- **High Confidence (≥70)**: Strong evidence of misannotation; multiple species show "fused" versions of this gene
-- **Medium Confidence (40-69)**: Moderate evidence; may only be present in a small number of species or lacking alignment quality
-- **Low Confidence (<40)**: Weak evidence; may represent false positives or edge cases
+- **High Confidence (≥80)**: Strong evidence of misannotation; multiple species show "fused" versions of this gene
+- **Medium Confidence (60-79)**: Moderate evidence; may only be present in a small number of species or lacking alignment quality
+- **Low Confidence (<59)**: Weak evidence; may represent false positives or edge cases
 
 ## How It Works
 
