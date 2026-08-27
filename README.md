@@ -39,7 +39,7 @@ These genes can then be evaluted in wet-lab or by re-running computationally exp
 
 1. **Proteome file** (`.faa`) - FASTA file containing all protein sequences for the organism
 2. **Genome annotation** (`.gff`) - GFF3 format annotation file (RefSeq recommended)
-3. **Reference database** (`.dmnd`) - Pre-built DIAMOND database of reference proteins. It is recommendeded to use a proteome containing organisms from the same class as the species of interest (ergo, Insecta for _Drosophila_ and Mammalia for _Mouse_). Be sure to build the database with taxonomic information, or the program will not be able to filter self-hits properly.
+3. **Reference database** (`.dmnd`) - Pre-built DIAMOND database of reference proteins. It is recommendeded to use a proteome containing organisms from the same class as the species of interest (ergo, Insecta for _Drosophila_ and Mammalia for _Mouse_). Be sure to build the database with taxonomic information, or the program will not be able to filter self-hits properly. For convenience, we uploaded the Insecta database that we generated for our paper: https://doi.org/10.5281/zenodo.22131538 . This diamond database can be used to check for misannotations in other Insecta genomes.
 
 ## Installation
 
@@ -83,7 +83,7 @@ python GenoMiss.py \
 python GenoMiss.py \
   -p apis_mellifera_protein.faa \
   -a apis_mellifera_annotation.gff \
-  -db insecta_refseq_protein_db.dmnd \
+  -db insecta_refseq_wtaxid_2025.dmnd \
   -o honeybee_results \
   -t 16 \
   -ds very-sensitive \
